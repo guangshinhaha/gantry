@@ -2,11 +2,21 @@ name: ci
 on:
   push:
     branches: [main]
+    paths-ignore: ["docs/**", "**/*.md"]
   pull_request:
+    paths-ignore: ["docs/**", "**/*.md"]
+
+# A new push to a PR cancels its run still in flight. Main is never cancelled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gantry:
     uses: guangshinhaha/gantry/.github/workflows/ci.yml@main
+    permissions:
+      contents: read
+      pull-requests: read
     # with:
     #   runs-on: '["self-hosted","gantry"]'   # once your runner is up
     #   e2e: true

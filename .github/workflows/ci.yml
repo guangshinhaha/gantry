@@ -25,9 +25,33 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  # On push to main, skip when the commit is a merged PR: its CI already ran
+  # on the pull_request event. Halved notifysg's Actions minutes.
+  gate:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          merged=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+            --jq '[.[] | select(.merged_at != null)] | length')
+          if [ "$merged" -gt 0 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "Already tested in its PR."
+          else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+
   secrets:
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +68,8 @@ jobs:
 
   node:
     # Node/TS repos only: callers without package.json should not call this job.
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     steps:
       - uses: actions/checkout@v4
