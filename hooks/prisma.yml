@@ -1,0 +1,21 @@
+# gantry/prisma — opt-in for repos using Prisma.
+pre-commit:
+  commands:
+    gantry-prisma-raw-sql:
+      # $queryRawUnsafe / Prisma.raw bypass SQL-injection protection.
+      glob: "*.{ts,tsx,js,jsx}"
+      run: |
+        hits=$(git diff --cached -U0 -- {staged_files} | grep '^+' | grep -v '^+++' | grep -E '(\$queryRawUnsafe|\$executeRawUnsafe|Prisma\.raw\()' || true)
+        if [ -n "$hits" ]; then
+          echo "$hits"
+          echo "Use \$queryRaw with tagged templates (Prisma.sql / Prisma.join) instead."
+          exit 1
+        fi
+
+    gantry-prisma-dockerfile:
+      glob: "Dockerfile"
+      run: |
+        grep -q "COPY prisma ./prisma" Dockerfile || {
+          echo "Dockerfile must 'COPY prisma ./prisma' before 'RUN npx prisma generate'."
+          exit 1
+        }

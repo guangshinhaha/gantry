@@ -1,0 +1,22 @@
+# gantry/nextjs — opt-in for Next.js apps.
+pre-commit:
+  commands:
+    gantry-next-build-time-io:
+      # DB/API calls inside generateStaticParams/getStaticProps break builds
+      # (no DB at build time). Use ISR or on-demand revalidation instead.
+      glob: "*.{ts,tsx}"
+      run: |
+        hits=$(git diff --cached -U0 -- {staged_files} | grep '^+' | grep -E '(prisma\.|fetch\()' | grep -iE '(generateStaticParams|getStaticProps)' || true)
+        [ -z "$hits" ] || { echo "$hits"; echo "No DB/API calls at build time; use ISR."; exit 1; }
+
+pre-push:
+  commands:
+    gantry-e2e:
+      # Runs Playwright only when app code changed in the pushed commits.
+      priority: 10
+      files: git diff --name-only @{push}..HEAD 2>/dev/null || git diff --name-only origin/HEAD..HEAD
+      glob: "{src/**,app/**,e2e/**,playwright.config.ts}"
+      run: |
+        [ -f node_modules/.bin/playwright ] || { echo "skip e2e: @playwright/test not installed"; exit 0; }
+        pm=npm; [ -f pnpm-lock.yaml ] && pm=pnpm
+        $pm run --if-present test:e2e

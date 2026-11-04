@@ -1,0 +1,12 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gantry:
+    uses: guangshinhaha/gantry/.github/workflows/ci.yml@main
+    # with:
+    #   runs-on: '["self-hosted","gantry"]'   # once your runner is up
+    #   e2e: true

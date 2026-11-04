@@ -1,0 +1,11 @@
+# Checks come from gantry (https://github.com/guangshinhaha/gantry).
+# Add or remove configs per repo. Repo-only checks go below `remotes`.
+remotes:
+  - git_url: https://github.com/guangshinhaha/gantry
+    ref: main
+    refetch_frequency: 24h
+    configs:
+      - hooks/base.yml
+      - hooks/node.yml
+      # - hooks/prisma.yml
+      # - hooks/nextjs.yml

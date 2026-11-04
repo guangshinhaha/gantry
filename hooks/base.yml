@@ -1,0 +1,20 @@
+# gantry/base — checks for every repo, any language.
+pre-commit:
+  parallel: true
+  commands:
+    gantry-secrets:
+      # Blocks commits that contain API keys, tokens, passwords.
+      run: gitleaks protect --staged --redact --verbose
+      fail_text: "Secret detected. Remove it; never commit credentials."
+
+    gantry-no-escape-hatches:
+      # LLMs reach for `any` and eslint-disable to make errors go away.
+      # Model the type properly instead.
+      glob: "*.{ts,tsx,js,jsx,mjs,cjs}"
+      run: |
+        hits=$(git diff --cached -U0 -- {staged_files} | grep '^+' | grep -v '^+++' | grep -E '(eslint-disable|: any\b|as any\b|@ts-ignore)' || true)
+        if [ -n "$hits" ]; then
+          echo "$hits"
+          echo "Staged changes add 'any', @ts-ignore or eslint-disable. Model the type instead."
+          exit 1
+        fi

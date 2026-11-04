@@ -1,0 +1,89 @@
+# gantry reusable CI. Call it from a repo with:
+#
+#   jobs:
+#     gantry:
+#       uses: guangshinhaha/gantry/.github/workflows/ci.yml@main
+#
+# Same checks as the local hooks, but they run on the server, so neither
+# `--no-verify` nor Claude can skip them.
+name: gantry-ci
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'JSON runner label, e.g. "ubuntu-latest" or ["self-hosted","gantry"]'
+        type: string
+        default: '"ubuntu-latest"'
+      node-version:
+        type: string
+        default: "22"
+      e2e:
+        description: Run `test:e2e` (Playwright)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        run: |
+          if ! command -v gitleaks >/dev/null; then
+            curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+              | tar -xz -C /tmp gitleaks
+            export PATH="/tmp:$PATH"
+          fi
+          gitleaks detect --redact --verbose
+
+  node:
+    # Node/TS repos only: callers without package.json should not call this job.
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect package manager
+        id: pm
+        run: |
+          if [ -f pnpm-lock.yaml ]; then echo "pm=pnpm" >> "$GITHUB_OUTPUT"
+          else echo "pm=npm" >> "$GITHUB_OUTPUT"; fi
+
+      - if: steps.pm.outputs.pm == 'pnpm'
+        uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ steps.pm.outputs.pm }}
+
+      - name: Install
+        run: |
+          if [ "${{ steps.pm.outputs.pm }}" = pnpm ]; then pnpm install --frozen-lockfile
+          else npm ci; fi
+
+      - name: Lint
+        run: ${{ steps.pm.outputs.pm }} run --if-present lint
+
+      - name: Typecheck
+        run: |
+          if [ -f tsconfig.json ]; then npx tsc --noEmit; else echo "no tsconfig.json, skipped"; fi
+
+      - name: Unit tests
+        run: ${{ steps.pm.outputs.pm }} run --if-present test
+
+      - name: Dependency audit (high+)
+        run: |
+          if [ "${{ steps.pm.outputs.pm }}" = pnpm ]; then pnpm audit --audit-level high --prod
+          else npm audit --audit-level=high --omit=dev; fi
+
+      - name: E2E
+        if: ${{ inputs.e2e }}
+        run: |
+          npx playwright install --with-deps chromium
+          ${{ steps.pm.outputs.pm }} run test:e2e

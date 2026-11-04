@@ -1,0 +1,33 @@
+# gantry/node — JS/TS projects. Each check skips itself if the repo
+# lacks the script/config, so it is safe to include everywhere.
+#
+# Package manager is picked from the lockfile (pnpm > npm).
+
+pre-commit:
+  commands:
+    gantry-lint-staged:
+      glob: "*.{ts,tsx,js,jsx,mjs,cjs}"
+      run: |
+        [ -f node_modules/.bin/eslint ] || exit 0
+        node_modules/.bin/eslint --no-warn-ignored {staged_files}
+
+pre-push:
+  commands:
+    gantry-typecheck:
+      priority: 1
+      run: |
+        [ -f tsconfig.json ] || exit 0
+        node_modules/.bin/tsc --noEmit
+
+    gantry-test:
+      priority: 2
+      run: |
+        pm=npm; [ -f pnpm-lock.yaml ] && pm=pnpm
+        $pm run --if-present test
+
+    gantry-audit:
+      priority: 3
+      run: |
+        if [ -f pnpm-lock.yaml ]; then pnpm audit --audit-level high --prod
+        elif [ -f package-lock.json ]; then npm audit --audit-level=high --omit=dev
+        fi
