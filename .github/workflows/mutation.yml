@@ -1,0 +1,176 @@
+# gantry mutation testing. Call it from a repo with:
+#
+#   jobs:
+#     mutation:
+#       uses: guangshinhaha/gantry/.github/workflows/mutation.yml@main
+#
+# On a PR: mutates only the source files the PR changed, posts surviving
+# mutants as a PR comment, uploads the HTML report. Report-only unless the
+# repo's stryker config sets thresholds.break.
+# Manual run (workflow_dispatch): mutates everything in the config's `mutate`.
+# Skips itself when the repo has no stryker config.
+name: gantry-mutation
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: '"ubuntu-latest"'
+      node-version:
+        type: string
+        default: "22"
+      max-minutes:
+        description: Stop Stryker after this long and report the cap (≤ 20; keeps Actions minutes bounded)
+        type: number
+        default: 15
+      prepare:
+        description: Extra shell command to run after install (codegen etc.)
+        type: string
+        default: ""
+      gantry-ref:
+        description: gantry ref for the report script
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  mutation:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 30 # backstop; max-minutes (≤ 20) is the real cap
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find stryker config and files to mutate
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          cfg=$(ls stryker.config.* stryker.conf.* 2>/dev/null | head -1 || true)
+          if [ -z "$cfg" ]; then
+            echo "No stryker config: mutation testing is off for this repo."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ -z "$BASE_SHA" ]; then
+            echo "Not a PR: mutating everything in $cfg."
+            echo "run=true" >> "$GITHUB_OUTPUT"; echo "mutate=" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files=$(git diff --name-only --diff-filter=AMR "$BASE_SHA" HEAD \
+            | grep -E '\.(ts|tsx|js|jsx|mjs|cjs)$' \
+            | grep -vE '\.(test|spec|stories|config)\.|\.d\.ts$|(^|/)(test|tests|__tests__|__mocks__|e2e|scripts|node_modules)/' \
+            || true)
+          if [ -z "$files" ]; then
+            echo "No source files changed: nothing to mutate."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "Mutating:"; echo "$files"
+          echo "run=true" >> "$GITHUB_OUTPUT"
+          echo "mutate=$(echo "$files" | paste -sd, -)" >> "$GITHUB_OUTPUT"
+
+      - name: Detect package manager
+        if: steps.scope.outputs.run == 'true'
+        id: pm
+        run: |
+          if [ -f pnpm-lock.yaml ]; then echo "pm=pnpm" >> "$GITHUB_OUTPUT"
+          else echo "pm=npm" >> "$GITHUB_OUTPUT"; fi
+
+      - if: steps.scope.outputs.run == 'true' && steps.pm.outputs.pm == 'pnpm'
+        uses: pnpm/action-setup@v4
+
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ steps.pm.outputs.pm }}
+
+      - name: Install
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          if [ "${{ steps.pm.outputs.pm }}" = pnpm ]; then pnpm install --frozen-lockfile
+          else npm ci; fi
+
+      # Generated code the type checker needs (e.g. the Prisma client).
+      - name: Generate
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          if [ -f prisma/schema.prisma ]; then npx prisma generate; fi
+          ${{ inputs.prepare }}
+
+      # Incremental mode: mutants whose code and tests didn't change since the
+      # last run on this branch (or the base branch) are not re-tested.
+      - name: Restore incremental results
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: reports/stryker-incremental.json
+          key: stryker-${{ github.head_ref || github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            stryker-${{ github.head_ref || github.ref_name }}-
+            stryker-${{ github.base_ref || github.ref_name }}-
+
+      - name: Stryker
+        if: steps.scope.outputs.run == 'true'
+        id: stryker
+        env:
+          MUTATE: ${{ steps.scope.outputs.mutate }}
+        run: |
+          set +e
+          args="run --incremental --reporters html,json,clear-text"
+          [ -n "$MUTATE" ] && args="$args --mutate $MUTATE"
+          timeout "${{ inputs.max-minutes }}m" npx stryker $args
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" = 124 ]; then echo "::warning::Stopped at the ${{ inputs.max-minutes }}-minute cap."; fi
+          exit 0
+
+      - name: Summarise
+        if: steps.scope.outputs.run == 'true'
+        env:
+          RC: ${{ steps.stryker.outputs.rc }}
+          CAP: ${{ inputs.max-minutes }}
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${{ inputs.gantry-ref }}/scripts/mutation-report.mjs" -o /tmp/mutation-report.mjs
+          {
+            echo "<!-- gantry-mutation -->"
+            echo "### Mutation testing"
+            if [ "$RC" = 124 ]; then
+              echo "> ⏱ Stopped at the ${CAP}-minute cap, so there is no result. Split the PR, or run locally: \`npx stryker run --mutate <file>\`."
+            else
+              node /tmp/mutation-report.mjs reports/mutation/mutation.json
+              [ "$RC" != 0 ] && echo && echo "> ❌ Below the repo's \`thresholds.break\`."
+            fi
+            echo
+            echo "<sub>Full report: **mutation-report** artifact on [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).</sub>"
+          } > /tmp/mutation-comment.md
+          cat /tmp/mutation-comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on PR
+        if: steps.scope.outputs.run == 'true' && github.event.pull_request.number
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- gantry-mutation -->")) | .id' | head -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@/tmp/mutation-comment.md >/dev/null
+          else
+            gh api "repos/${{ github.repository }}/issues/$PR/comments" -F body=@/tmp/mutation-comment.md >/dev/null
+          fi
+
+      - name: Upload report
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: reports/mutation/
+          if-no-files-found: ignore
+
+      - name: Fail if below thresholds.break
+        if: steps.scope.outputs.run == 'true' && steps.stryker.outputs.rc != '0' && steps.stryker.outputs.rc != '124'
+        run: exit 1

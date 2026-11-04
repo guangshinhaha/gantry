@@ -2,16 +2,17 @@
 # Apply gantry to a repo: lefthook.yml, CI workflow, CLAUDE.md skeleton.
 # Never overwrites existing files. Safe to re-run.
 #
-#   gantry-init [repo-dir] [--prisma] [--nextjs]
+#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation]
 set -e
 
 GANTRY_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="."
-PRISMA=0; NEXTJS=0
+PRISMA=0; NEXTJS=0; MUTATION=1
 for arg in "$@"; do
   case "$arg" in
     --prisma) PRISMA=1 ;;
     --nextjs) NEXTJS=1 ;;
+    --no-mutation) MUTATION=0 ;;
     *) TARGET="$arg" ;;
   esac
 done
@@ -28,6 +29,28 @@ copy "$GANTRY_DIR/template/lefthook.yml" lefthook.yml
 copy "$GANTRY_DIR/template/.github/workflows/ci.yml" .github/workflows/ci.yml
 copy "$GANTRY_DIR/template/CLAUDE.md" CLAUDE.md
 
+# Mutation testing: on by default for single-package Vitest/Jest repos.
+if [ "$MUTATION" = 1 ] && [ -f package.json ]; then
+  if ls stryker.config.* stryker.conf.* >/dev/null 2>&1; then
+    echo "  keep   stryker config (exists)"
+    copy "$GANTRY_DIR/template/.github/workflows/mutation.yml" .github/workflows/mutation.yml
+  else
+    plan=$(node "$GANTRY_DIR/bin/stryker-plan.mjs" "$GANTRY_DIR/template/stryker.config.mjs") || plan="off: could not read package.json"
+    case "$plan" in
+      off:*) echo "  skip   mutation testing (${plan#off: })" ;;
+      *)
+        copy "$GANTRY_DIR/template/.github/workflows/mutation.yml" .github/workflows/mutation.yml
+        echo "  add    stryker.config.mjs"
+        echo "  install $plan"
+        if [ -f pnpm-lock.yaml ]; then pnpm add -D $plan >/dev/null; else npm install -D $plan >/dev/null; fi
+        for l in ".stryker-tmp/" "reports/mutation/" "reports/stryker-incremental.json"; do
+          grep -qxF "$l" .gitignore 2>/dev/null || echo "$l" >> .gitignore
+        done
+        ;;
+    esac
+  fi
+fi
+
 # Uncomment opt-in configs.
 [ "$PRISMA" = 1 ] && sed -i '' 's|# - hooks/prisma.yml|- hooks/prisma.yml|' lefthook.yml
 [ "$NEXTJS" = 1 ] && sed -i '' 's|# - hooks/nextjs.yml|- hooks/nextjs.yml|' lefthook.yml
@@ -42,4 +65,4 @@ fi
 
 command -v lefthook >/dev/null || { echo "install lefthook first: brew install lefthook"; exit 1; }
 lefthook install
-echo "done. Commit lefthook.yml and .github/workflows/ci.yml."
+echo "done. Commit the added files (lefthook.yml, .github/workflows/, stryker.config.mjs, package.json)."

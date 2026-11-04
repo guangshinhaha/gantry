@@ -14,9 +14,6 @@ Ideas waiting for Shin's go. Not implemented.
   deployment URLs point at the dashboard), Northflank/GovPaaS (CLI/API; may
   need a self-hosted runner if previews are internal-only), Vercel (GitHub
   deployment URL). Pilot: notifysg's next PR (PR environments enabled).
-- **Mutation testing.** Stryker on changed files or core modules, weekly
-  or on demand, not per PR. Survivors become issues for Claude to kill. OGP
-  took one PR from 55% to 96% coverage in ~2.5h for ~$100.
 - **Lighthouse scan in CI** for accessibility and performance against the
   preview URL (OGP caught a 5MB icon this way). Depends on preview.yml.
 - **`needs-human` label** for PRs touching risky paths (auth, tenancy/RLS,
@@ -31,6 +28,9 @@ Ideas waiting for Shin's go. Not implemented.
   needs a personal GitHub org to serve all repos). Only when secrets/network
   require it or a CPU-bound suite needs more than 2 vCPUs (notifysg: ~18 min).
 - **`build.yml`**: Docker build to GHCR, for apps not built by their platform.
+
+- **Auto-kill survivors** with claude-code-action on a `kill-mutants` label
+  (costs API usage; do it by hand first).
 
 ## Notes
 
