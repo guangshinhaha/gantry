@@ -1,69 +1,133 @@
 # gantry
 
-The frame the robots build in. Deterministic checks around LLM-written code,
-shared across all my repos.
+**The frame the robots build in.** Most of the code in my repos is written by
+Claude. gantry is the set of automatic checks around that code: one shared
+setup, so every repo gets the same guardrails without copying anything.
 
-Three layers, from easy for Claude to ignore to impossible to skip:
+Written instructions only go so far: an agent under pressure will add `as any`,
+skip a test or commit a key. gantry's answer is checks that *run*, at three
+levels, each harder to get around than the last:
 
-1. `CLAUDE.md`: guidance (template in `template/`)
-2. **Local hooks** (lefthook): run on commit and push
-3. **CI** (reusable GitHub workflow): runs on the server; `--no-verify` doesn't help
-
-## Checks
-
-| Config | Hook | Checks |
+| Layer | Where | Can it be skipped? |
 |---|---|---|
-| `hooks/base.yml` | pre-commit | gitleaks secret scan; no `any` / `@ts-ignore` / `eslint-disable` |
-| `hooks/node.yml` | pre-commit | eslint on staged files |
-| | pre-push | `tsc --noEmit`, `test`, audit (high+, prod deps) |
-| `hooks/prisma.yml` | pre-commit | no `$queryRawUnsafe` / `Prisma.raw()`; Dockerfile copies prisma |
-| `hooks/nextjs.yml` | pre-commit | no DB/API calls at build time |
-| | pre-push | Playwright e2e when app code changed |
-| `.github/workflows/ci.yml` | CI | gitleaks, lint, typecheck, test, audit, optional e2e |
-| `.github/workflows/mutation.yml` | CI (PRs) | Stryker on the files the PR changed; survivors posted as a PR comment |
+| **CLAUDE.md** | the repo | Easily: it's guidance the agent reads |
+| **Local hooks** | your machine, on commit and push | Only with `--no-verify`, which is banned |
+| **CI** | GitHub, on every PR | No |
 
-Every Node check skips itself when the repo lacks the script or config.
+## What runs when
 
-## Use it
+**On every commit** (fast, staged files only)
+- **Secret scan** (gitleaks): blocks API keys, tokens and passwords.
+- **No escape hatches:** blocks newly added `any`, `as any`, `@ts-ignore` and
+  `eslint-disable`, the usual ways to make an error disappear instead of fixing it.
+- **ESLint** on the staged files, if the repo uses ESLint.
 
-New or existing repo:
+**On every push**
+- **Typecheck** (`tsc --noEmit`), **unit tests**, and a **dependency audit**
+  (high severity and above, production dependencies only).
+
+**On every pull request** (GitHub Actions)
+- The same checks again on a clean machine: secrets, lint, typecheck, tests, audit.
+- **Mutation testing** on the files the PR changed (see below). Survivors are
+  posted as a PR comment.
+- Optional: Playwright end-to-end tests.
+
+**Optional extras** for some stacks
+- `prisma`: blocks raw-SQL escape hatches (`$queryRawUnsafe`, `Prisma.raw()`);
+  checks the Dockerfile copies the Prisma schema.
+- `nextjs`: blocks database or API calls at build time; runs Playwright on push
+  when app code changed.
+
+Every check skips itself when a repo doesn't have the relevant script or
+config, so it is safe to turn everything on everywhere.
+
+## Mutation testing
+
+Code coverage says which lines your tests *run*. Mutation testing checks
+whether the tests would *notice if those lines were wrong*.
+
+[Stryker](https://stryker-mutator.io) makes small deliberate bugs ("mutants")
+in your code and reruns the tests for each one:
+
+```
+if (used >= cap)   →   if (used > cap)
+a && b             →   a || b
+await audit.log()  →   (removed)
+```
+
+If a test fails, the mutant is **killed**. If every test still passes, it
+**survived**: that behaviour is untested. The PR comment lists each survivor:
+
+> **Mutation score 88.1%** (74/84 killed, 4 files)
+>
+> - `src/lib/div-rep-quota.ts:64` ConditionalExpression: `const isThisMonth = … && …` → `true`
+
+That one was real: on sums, no test checked that last month's studies don't
+count towards this month's quota.
+
+**Fixing survivors:** ask Claude to "kill the survivors on PR #N". It adds or
+tightens tests until each mutant fails one. It never changes app code just to
+kill a mutant. If a change makes no real difference, it marks the line
+`// Stryker disable next-line <Mutator>: <reason>`.
+
+**Keeping it cheap**
+- Only the files the PR changed are mutated, never the whole repo.
+- Each mutant runs only the tests that cover it.
+- Results are cached between pushes; stale runs are cancelled; drafts are skipped.
+- A hard 15-minute cap. Public repos don't use Actions minutes at all.
+
+It's on by default for Vitest and Jest repos. It's off for node:test (too slow
+under Stryker), monorepos and repos without tests. It reports only and never
+blocks a merge, unless you set `thresholds.break` in `stryker.config.mjs`.
+
+## Using it
+
+**New repo:** in Claude Code, run `/new-repo <git link>`. It clones the repo,
+applies gantry, writes a starting CLAUDE.md, and asks before pushing.
+
+**Existing repo:**
 
 ```sh
 ~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation]
 git add -A && git commit -m "Add gantry checks"
 ```
 
-It never overwrites files. Repos on husky are left alone with instructions
-for switching.
+`gantry-init` never overwrites a file that already exists, and is safe to run
+again. It adds:
 
-Repo-specific checks go in that repo's own `lefthook.yml` under `remotes`.
-A check that turns out useful everywhere moves here.
+| File | What it is |
+|---|---|
+| `lefthook.yml` | Local hooks. Points at this repo, so updates arrive automatically (re-fetched daily). |
+| `.github/workflows/ci.yml` | A few lines that call gantry's shared CI. |
+| `.github/workflows/mutation.yml` | A few lines that call gantry's mutation testing. |
+| `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
+| `CLAUDE.md` | A starting template: commands, gates, review rules. |
 
-## Mutation testing
+Repos that use husky are left alone, with instructions for switching.
 
-Mutation testing checks that tests catch bugs: Stryker makes small changes to
-the code (`>` → `>=`, `&&` → `||`, drops a call) and reruns the tests. A change
-no test notices is a *survivor*: behaviour nothing checks.
+**Repo-specific checks** go in that repo's own `lefthook.yml` or workflow.
+When one turns out to be useful everywhere, move it here.
 
-- **On by default** for single-package Vitest/Jest repos: `gantry-init` adds
-  `stryker.config.mjs`, the Stryker dev deps and `mutation.yml`. Off for
-  node:test (too slow under Stryker), monorepos and repos without tests.
-- **Runs on non-draft PRs**, mutating only changed source files. Incremental
-  results are cached, stale runs cancelled, and Stryker stops at 15 min
-  (`max-minutes`). Manual full run: workflow_dispatch.
-- **Report-only.** Set `thresholds.break` in the config to fail the check.
-- **The loop:** ask Claude to "kill the survivors on PR #N". It adds tests,
-  never changes app code to kill a mutant, and marks equivalent mutants with
-  `// Stryker disable next-line <Mutator>: <reason>`.
-- Locally: `npx stryker run --mutate src/lib/foo.ts`, then
-  `node ~/Desktop/projects/gantry/scripts/mutation-report.mjs`.
-- Codegen before the type checker: Prisma is generated automatically; pass
-  `prepare:` for anything else.
+## How it's built
 
-Measured on sums (PR #287's 4 files, 84 mutants): 85 s locally, 88% score;
-caught an untested "this month" check in the quota count.
+```
+hooks/          lefthook configs: base (every repo), node, prisma, nextjs
+.github/workflows/
+  ci.yml        shared CI that repos call
+  mutation.yml  shared mutation testing that repos call
+template/       files gantry-init copies into a repo
+bin/gantry-init sets a repo up
+scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
+BACKLOG.md      ideas not built yet
+```
 
-## Self-hosted runner (later)
+Repos follow `main`, so a change here reaches every repo at once: the hooks on
+their next daily re-fetch, CI on their next run. Test changes on one repo first.
 
-Pass `runs-on: '["self-hosted","gantry"]'` in a repo's `ci.yml`. Keep the
-runner ephemeral, private repos only, and keep secrets on the runner host.
+To run CI on your own machine instead of GitHub's, pass
+`runs-on: '["self-hosted","gantry"]'` in a repo's `ci.yml`.
+
+## Next
+
+See [BACKLOG.md](BACKLOG.md): blocking merges on red CI, a preview deploy for
+every PR with smoke tests, Lighthouse scans, and automatic survivor-killing.
