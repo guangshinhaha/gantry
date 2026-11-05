@@ -27,7 +27,8 @@ levels, each harder to get around than the last:
   (high severity and above, production dependencies only).
 
 **On every pull request** (GitHub Actions)
-- The same checks again on a clean machine: secrets, lint, format check, typecheck, tests, audit.
+- The same checks again on a clean machine: secrets, lint (`lint:ci` if defined, else `lint`), format check, typecheck, tests, audit.
+  Every check runs even if an earlier one fails, so one push shows all failures. A failed install still stops the job.
 - **Mutation testing** on the files the PR changed (see below). Survivors are
   posted as a PR comment.
 - **`needs-human` label** when the PR touches a risky path (auth, migrations,
