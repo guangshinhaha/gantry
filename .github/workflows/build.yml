@@ -1,0 +1,108 @@
+# gantry Docker build. Call it from a repo with:
+#
+#   jobs:
+#     build:
+#       uses: guangshinhaha/gantry/.github/workflows/build.yml@main
+#       permissions:
+#         contents: read
+#         packages: write   # only the push job below uses it
+#
+# PRs: build the Dockerfile, no push (catches broken Dockerfiles).
+# main: push ghcr.io/<owner>/<repo> tagged sha-<short> and latest.
+# Skips itself when the repo has no Dockerfile.
+name: gantry-build
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: '"ubuntu-latest"'
+      context:
+        type: string
+        default: "."
+      file:
+        description: Dockerfile path (default <context>/Dockerfile)
+        type: string
+        default: ""
+      platforms:
+        type: string
+        default: linux/amd64
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    outputs:
+      has-dockerfile: ${{ steps.find.outputs.found }}
+      file: ${{ steps.find.outputs.file }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: find
+        env:
+          CONTEXT: ${{ inputs.context }}
+          FILE: ${{ inputs.file }}
+        run: |
+          f="${FILE:-$CONTEXT/Dockerfile}"
+          if [ -f "$f" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "file=$f" >> "$GITHUB_OUTPUT"
+          else
+            echo "No $f: Docker build is off for this repo."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Pull requests: build only. No registry login, no packages permission.
+  build:
+    needs: detect
+    if: needs.detect.outputs.has-dockerfile == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ needs.detect.outputs.file }}
+          platforms: ${{ inputs.platforms }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # main: build and push to GHCR. The only job with packages: write.
+  push:
+    needs: detect
+    if: needs.detect.outputs.has-dockerfile == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ needs.detect.outputs.file }}
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

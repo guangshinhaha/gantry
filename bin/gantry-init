@@ -2,18 +2,19 @@
 # Apply gantry to a repo: lefthook.yml, CI workflow, CLAUDE.md skeleton.
 # Never overwrites existing files. Safe to re-run.
 #
-#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation] [--review]
+#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker]
 set -e
 
 GANTRY_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="."
-PRISMA=0; NEXTJS=0; MUTATION=1; REVIEW=0
+PRISMA=0; NEXTJS=0; MUTATION=1; REVIEW=0; DOCKER=0
 for arg in "$@"; do
   case "$arg" in
     --prisma) PRISMA=1 ;;
     --nextjs) NEXTJS=1 ;;
     --no-mutation) MUTATION=0 ;;
     --review) REVIEW=1 ;;
+    --docker) DOCKER=1 ;;
     *) TARGET="$arg" ;;
   esac
 done
@@ -34,6 +35,9 @@ copy "$GANTRY_DIR/template/gantry-risky-paths" .github/gantry-risky-paths
 copy "$GANTRY_DIR/template/.github/workflows/ac-check.yml" .github/workflows/ac-check.yml
 copy "$GANTRY_DIR/template/.github/pull_request_template.md" .github/pull_request_template.md
 copy "$GANTRY_DIR/template/CLAUDE.md" CLAUDE.md
+
+# Docker build to GHCR: opt-in.
+[ "$DOCKER" = 1 ] && copy "$GANTRY_DIR/template/.github/workflows/build.yml" .github/workflows/build.yml
 
 # Mutation testing: on by default for single-package Vitest/Jest repos.
 if [ "$MUTATION" = 1 ] && [ -f package.json ]; then
