@@ -35,6 +35,8 @@ levels, each harder to get around than the last:
   latest commit, Playwright `@smoke` tests run against it. Screenshots are
   uploaded and one PR comment (updated on every push) shows pass or fail. See
   below.
+- Optional: **Lighthouse scan** of the preview (scores and top failing
+  audits in the same PR comment). See below.
 
 **Optional extras** for some stacks
 - `prisma`: blocks raw-SQL escape hatches (`$queryRawUnsafe`, `Prisma.raw()`);
@@ -109,6 +111,16 @@ Without the secret (including PRs from forks) or without `@smoke` tests, the
 job skips itself. Inputs: `platform`, `smoke-command`, `timeout-minutes`,
 `railway-project-id`, `railway-service`.
 
+**Lighthouse (optional, off by default).** Set `lighthouse: true` in the
+caller's `with:` and, once the smoke tests pass, `@lhci/cli` scans the preview
+and adds a table of Performance, Accessibility, Best practices and SEO scores,
+plus the top failing audits, to the same PR comment. HTML reports are in the
+**preview-lighthouse** artifact. `lighthouse-urls` is a space or newline
+separated list of paths (default `/`). It reports only, unless you set
+`lighthouse-min-a11y` (0-100): the job then fails when any scanned page scores
+lower on accessibility. It needs the same preview URL as the smoke tests, so
+it skips whenever they do.
+
 ## Using it
 
 **New repo:** in Claude Code, run `/new-repo <git link>`. It clones the repo,
@@ -146,11 +158,13 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
   ci.yml        shared CI that repos call
   mutation.yml  shared mutation testing that repos call
   preview.yml   shared preview smoke tests. Platform-neutral; the only
-                platform-specific part is one "Find preview URL" step
+                platform-specific part is one "Find preview URL" step.
+                Optional Lighthouse step runs after smoke.
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
 scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 preview-railway.mjs: Railway adapter, finds and checks the preview URL
+                lighthouse-report.mjs: turns Lighthouse results into the PR comment section
 BACKLOG.md      ideas not built yet
 ```
 
@@ -163,4 +177,4 @@ To run CI on your own machine instead of GitHub's, pass
 ## Next
 
 See [BACKLOG.md](BACKLOG.md): blocking merges on red CI, Vercel and Northflank preview
-adapters, Lighthouse scans, and automatic survivor-killing.
+adapters, and automatic survivor-killing.

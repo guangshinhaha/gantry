@@ -14,6 +14,9 @@ jobs:
     uses: guangshinhaha/gantry/.github/workflows/preview.yml@main
     with:
       platform: railway
+      # lighthouse: true            # report-only scan after smoke passes
+      # lighthouse-urls: "/ /login"  # paths to scan (default /)
+      # lighthouse-min-a11y: 90     # fail below this accessibility score
     secrets: inherit
     permissions:
       contents: read

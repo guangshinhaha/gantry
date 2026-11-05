@@ -11,8 +11,6 @@ Ideas waiting for Shin's go. Not implemented.
 - **Preview adapters** for `preview.yml` (Railway is done): Vercel (GitHub
   deployment URL), Northflank/GovPaaS (CLI/API; may need a self-hosted runner
   if previews are internal-only). Add one "Find preview URL" step each.
-- **Lighthouse scan in CI** for accessibility and performance against the
-  preview URL (OGP caught a 5MB icon this way). Depends on preview.yml.
 - **`needs-human` label** for PRs touching risky paths (auth, tenancy/RLS,
   payments, API keys, migrations), listed per repo.
 - **Automated second review** on every PR (dx-code-review or codex).
