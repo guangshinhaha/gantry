@@ -1,0 +1,17 @@
+name: ac-check
+# Fails a PR that closes an issue with an "Acceptance criteria" checklist
+# unless the PR body ticks every item. Skips itself otherwise.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+concurrency:
+  group: ac-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  ac-check:
+    if: ${{ !github.event.pull_request.draft }}
+    uses: guangshinhaha/gantry/.github/workflows/ac-check.yml@main
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read

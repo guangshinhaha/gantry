@@ -19,8 +19,6 @@ Ideas waiting for Shin's go. Not implemented.
 - **`needs-human` label** for PRs touching risky paths (auth, tenancy/RLS,
   payments, API keys, migrations), listed per repo.
 - **Automated second review** on every PR (dx-code-review or codex).
-- **Acceptance criteria check**: PR template lists the issue's ACs; CI fails
-  on unticked ones.
 
 ## Infra
 

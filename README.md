@@ -30,6 +30,11 @@ levels, each harder to get around than the last:
 - The same checks again on a clean machine: secrets, lint, typecheck, tests, audit.
 - **Mutation testing** on the files the PR changed (see below). Survivors are
   posted as a PR comment.
+- **Acceptance criteria:** if the PR says `Closes #N` and issue N has an
+  `Acceptance criteria` checklist, the PR body must repeat it with every item
+  ticked (and evidence). Unticked items fail the check, named; editing the
+  body re-runs it. Fewer items than the issue only warns. Skips drafts and PRs
+  with no such issue.
 - Optional: Playwright end-to-end tests.
 
 **Optional extras** for some stacks
@@ -100,6 +105,8 @@ again. It adds:
 | `lefthook.yml` | Local hooks. Points at this repo, so updates arrive automatically (re-fetched daily). |
 | `.github/workflows/ci.yml` | A few lines that call gantry's shared CI. |
 | `.github/workflows/mutation.yml` | A few lines that call gantry's mutation testing. |
+| `.github/workflows/ac-check.yml` | A few lines that call gantry's acceptance-criteria check. |
+| `.github/pull_request_template.md` | PR template: `Closes #`, acceptance criteria, how I verified. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
 | `CLAUDE.md` | A starting template: commands, gates, review rules. |
 
@@ -115,9 +122,11 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
 .github/workflows/
   ci.yml        shared CI that repos call
   mutation.yml  shared mutation testing that repos call
+  ac-check.yml  shared acceptance-criteria check that repos call
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
 scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
+                ac-check.mjs: parses PR/issue checklists (tests: ac-check.test.mjs)
 BACKLOG.md      ideas not built yet
 ```
 
