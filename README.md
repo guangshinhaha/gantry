@@ -31,7 +31,7 @@ levels, each harder to get around than the last:
 - **Mutation testing** on the files the PR changed (see below). Survivors are
   posted as a PR comment.
 - Optional: Playwright end-to-end tests.
-- **Preview smoke tests** (Railway): once the PR's preview is live on the PR's
+- **Preview smoke tests** (Railway or Vercel): once the PR's preview is live on the PR's
   latest commit, Playwright `@smoke` tests run against it. Screenshots are
   uploaded and one PR comment (updated on every push) shows pass or fail. See
   below.
@@ -109,6 +109,23 @@ Without the secret (including PRs from forks) or without `@smoke` tests, the
 job skips itself. Inputs: `platform`, `smoke-command`, `timeout-minutes`,
 `railway-project-id`, `railway-service`.
 
+**Vercel** (`platform: vercel`): no token needed. The job reads the GitHub
+deployment status Vercel creates for the PR head commit, waits for `success`,
+and uses its `environment_url`. Everything after that (200 check, Playwright,
+screenshots, comment) is the same as Railway. Fork PRs are skipped. The caller
+needs `deployments: read` (the template has it).
+
+If Deployment Protection is on, add the `VERCEL_AUTOMATION_BYPASS_SECRET` repo
+secret (the project's Protection Bypass for Automation value). gantry sends it
+as the `x-vercel-protection-bypass` header on the 200 check, and passes it to
+Playwright as the env var of the same name. Playwright needs the header in
+`playwright.config.ts`:
+
+```ts
+use: { extraHTTPHeaders: process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+  ? { 'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET } : {} }
+```
+
 ## Using it
 
 **New repo:** in Claude Code, run `/new-repo <git link>`. It clones the repo,
@@ -146,11 +163,12 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
   ci.yml        shared CI that repos call
   mutation.yml  shared mutation testing that repos call
   preview.yml   shared preview smoke tests. Platform-neutral; the only
-                platform-specific part is one "Find preview URL" step
+                platform-specific part is one "Find preview URL" step per platform
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
 scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 preview-railway.mjs: Railway adapter, finds and checks the preview URL
+                preview-vercel.mjs: Vercel adapter, reads the GitHub deployment status
 BACKLOG.md      ideas not built yet
 ```
 
@@ -162,5 +180,5 @@ To run CI on your own machine instead of GitHub's, pass
 
 ## Next
 
-See [BACKLOG.md](BACKLOG.md): blocking merges on red CI, Vercel and Northflank preview
-adapters, Lighthouse scans, and automatic survivor-killing.
+See [BACKLOG.md](BACKLOG.md): blocking merges on red CI, Northflank preview
+adapter, Lighthouse scans, and automatic survivor-killing.
