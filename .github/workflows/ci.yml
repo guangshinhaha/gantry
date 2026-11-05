@@ -28,10 +28,12 @@ permissions:
   pull-requests: read
 
 jobs:
-  # On push to main, skip when the commit is a merged PR: its CI already ran
-  # on the pull_request event. Halved notifysg's Actions minutes.
+  # Decides whether the real jobs run. Skips when (a) the push to main is a
+  # merged PR, whose CI already ran on the pull_request event, or (b) the change
+  # only touches docs. Skipping happens here, not via workflow-level
+  # paths-ignore: a required check whose workflow never starts stays "pending"
+  # forever, but a skipped job still lets ci-ok report success.
   gate:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
@@ -43,15 +45,36 @@ jobs:
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
         run: |
-          merged=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
-            --jq '[.[] | select(.merged_at != null)] | length')
-          if [ "$merged" -gt 0 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "Already tested in its PR."
-          else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+          skip=false
+          if [ "$EVENT" = push ]; then
+            merged=$(gh api "repos/$REPO/commits/$SHA/pulls" \
+              --jq '[.[] | select(.merged_at != null)] | length')
+            if [ "$merged" -gt 0 ]; then skip=true; echo "Already tested in its PR."; fi
+          fi
+          if [ "$skip" = false ]; then
+            files=""
+            if [ "$EVENT" = pull_request ]; then
+              files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+            elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
+              files=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" --jq '.files[].filename') || files=""
+            fi
+            # Docs-only = at least one file and every file is docs/** or *.md.
+            other=$(printf '%s\n' "$files" | grep -vE '^docs/|\.md$' || true)
+            if [ -n "$files" ] && [ -z "$other" ]; then
+              skip=true; echo "Docs-only change, skipping checks."
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
   secrets:
     needs: gate
-    if: ${{ !cancelled() && needs.gate.outputs.skip != 'true' }}
+    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     steps:
       - uses: actions/checkout@v4
@@ -69,7 +92,7 @@ jobs:
   node:
     # Node/TS repos only: callers without package.json should not call this job.
     needs: gate
-    if: ${{ !cancelled() && needs.gate.outputs.skip != 'true' }}
+    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     steps:
       - uses: actions/checkout@v4
@@ -113,3 +136,22 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           ${{ steps.pm.outputs.pm }} run test:e2e
+
+  # Single required status check: shows up in callers as `gantry / ci-ok`.
+  # Fails if any job failed or was cancelled; success and skipped both pass.
+  ci-ok:
+    needs: [gate, secrets, node]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::a required job ended as $r"; exit 1 ;;
+            esac
+          done
