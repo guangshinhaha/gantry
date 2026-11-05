@@ -1,0 +1,10 @@
+# Paths that need a human review even when CI is green.
+# One glob per line; `#` starts a comment. `**` spans directories.
+# A PR that changes a matching file gets the `needs-human` label.
+# Edit to fit this repo; delete the file to turn the check off.
+**/auth/**
+**/migrations/**
+prisma/schema.prisma
+**/*rls*
+**/payments/**
+**/api-keys/**
