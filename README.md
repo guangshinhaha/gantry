@@ -31,6 +31,10 @@ levels, each harder to get around than the last:
 - **Mutation testing** on the files the PR changed (see below). Survivors are
   posted as a PR comment.
 - Optional: Playwright end-to-end tests.
+- **Docs-only changes** (`docs/**`, `*.md`) skip the checks above inside the
+  job, so the status still reports green instead of sitting on "pending".
+- **`gantry / ci-ok`**: one summary check. It fails if any job failed or was
+  cancelled; skipped jobs count as passing. This is the check to require.
 
 **Optional extras** for some stacks
 - `prisma`: blocks raw-SQL escape hatches (`$queryRawUnsafe`, `Prisma.raw()`);
@@ -40,6 +44,26 @@ levels, each harder to get around than the last:
 
 Every check skips itself when a repo doesn't have the relevant script or
 config, so it is safe to turn everything on everywhere.
+
+## Blocking merges on red CI
+
+CI alone doesn't stop a merge. To make `gantry / ci-ok` required on a repo's
+default branch (repo admins can bypass), run once per repo:
+
+```sh
+~/Desktop/projects/gantry/bin/gantry-protect owner/repo [--dry-run]
+```
+
+It creates a ruleset named `gantry`, or updates it if it exists.
+`--dry-run` prints the JSON payload and changes nothing. It needs `gh` signed
+in as a repo admin.
+
+- **Plan:** rulesets and protected branches on *private* repos need a paid
+  GitHub plan (Pro, Team or Enterprise). Free covers public repos only. GitHub's
+  docs are vague on per-plan detail, so check the repo's plan before relying on it.
+- **Railway:** turn on "Wait for CI" by hand, per service (Service Settings,
+  Source/Deploy). Otherwise Railway deploys before CI finishes. It can't be set
+  from this repo.
 
 ## Mutation testing
 
@@ -113,10 +137,12 @@ When one turns out to be useful everywhere, move it here.
 ```
 hooks/          lefthook configs: base (every repo), node, prisma, nextjs
 .github/workflows/
-  ci.yml        shared CI that repos call
+  ci.yml        shared CI that repos call: gate (merged-PR / docs-only skip),
+                secrets, node, then ci-ok (the one required check)
   mutation.yml  shared mutation testing that repos call
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
+bin/gantry-protect requires gantry / ci-ok on the default branch (ruleset)
 scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
 BACKLOG.md      ideas not built yet
 ```
@@ -129,5 +155,5 @@ To run CI on your own machine instead of GitHub's, pass
 
 ## Next
 
-See [BACKLOG.md](BACKLOG.md): blocking merges on red CI, a preview deploy for
+See [BACKLOG.md](BACKLOG.md): a preview deploy for
 every PR with smoke tests, Lighthouse scans, and automatic survivor-killing.

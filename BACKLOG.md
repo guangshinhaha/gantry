@@ -4,10 +4,6 @@ Ideas waiting for Shin's go. Not implemented.
 
 ## Merge confidence
 
-- **Block merging on red CI.** A `ci-ok` aggregate job (passes when every
-  job succeeded or was skipped) plus a ruleset on main requiring it, with an
-  owner bypass. Replace workflow-level `paths-ignore` with in-job skips so a
-  required check never sits on "pending". Pair with Railway's "Wait for CI".
 - **Per-PR preview + smoke tests** (`preview.yml`). One shared job (wait
   for URL, Playwright smoke, screenshots posted to the PR, check the deployed
   commit) with platform adapters: Railway (API with `RAILWAY_TOKEN`; GitHub

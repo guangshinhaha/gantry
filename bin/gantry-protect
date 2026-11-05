@@ -1,0 +1,52 @@
+#!/bin/sh
+# Require the `gantry / ci-ok` check on a repo's default branch via a ruleset.
+# Repo admins can bypass. Idempotent: updates the ruleset named "gantry" if it exists.
+#
+#   gantry-protect [owner/repo] [--dry-run]
+#
+# --dry-run prints the JSON payload and changes nothing. Without owner/repo,
+# uses the repo of the current directory (needs `gh`).
+set -e
+
+REPO=""; DRY=0
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY=1 ;;
+    -*) echo "unknown option: $arg" >&2; exit 2 ;;
+    *) REPO="$arg" ;;
+  esac
+done
+
+PAYLOAD='{
+  "name": "gantry",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "bypass_actors": [
+    { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }
+  ],
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [ { "context": "gantry / ci-ok" } ]
+      }
+    }
+  ]
+}'
+
+if [ "$DRY" = 1 ]; then
+  echo "$PAYLOAD"
+  exit 0
+fi
+
+[ -n "$REPO" ] || REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+id=$(gh api "repos/$REPO/rulesets" --jq '[.[] | select(.name == "gantry")][0].id // empty')
+if [ -n "$id" ]; then
+  echo "$PAYLOAD" | gh api -X PUT "repos/$REPO/rulesets/$id" --input - >/dev/null
+  echo "updated ruleset gantry ($id) on $REPO"
+else
+  echo "$PAYLOAD" | gh api -X POST "repos/$REPO/rulesets" --input - >/dev/null
+  echo "created ruleset gantry on $REPO"
+fi
