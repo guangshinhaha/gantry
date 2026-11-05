@@ -284,7 +284,6 @@ scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 lighthouse-report.mjs: turns Lighthouse results into the PR comment section
                 risky-paths.mjs: glob matching for needs-human (tests in scripts/test/)
                 ac-check.mjs: parses PR/issue checklists (tests: ac-check.test.mjs)
-BACKLOG.md      ideas not built yet
 ```
 
 Repos follow `main`, so a change here reaches every repo at once: the hooks on
@@ -295,5 +294,5 @@ To run CI on your own machine instead of GitHub's, pass
 
 ## Next
 
-See [BACKLOG.md](BACKLOG.md): Northflank preview adapter (shelved) and
-automatic survivor-killing.
+See the [open issues](https://github.com/guangshinhaha/gantry/issues). Ideas not yet scoped
+have the `idea` label; work waiting on something outside the repo has `blocked`.
