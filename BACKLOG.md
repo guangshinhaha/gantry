@@ -8,12 +8,9 @@ Ideas waiting for Shin's go. Not implemented.
   job succeeded or was skipped) plus a ruleset on main requiring it, with an
   owner bypass. Replace workflow-level `paths-ignore` with in-job skips so a
   required check never sits on "pending". Pair with Railway's "Wait for CI".
-- **Per-PR preview + smoke tests** (`preview.yml`). One shared job (wait
-  for URL, Playwright smoke, screenshots posted to the PR, check the deployed
-  commit) with platform adapters: Railway (API with `RAILWAY_TOKEN`; GitHub
-  deployment URLs point at the dashboard), Northflank/GovPaaS (CLI/API; may
-  need a self-hosted runner if previews are internal-only), Vercel (GitHub
-  deployment URL). Pilot: notifysg's next PR (PR environments enabled).
+- **Preview adapters** for `preview.yml` (Railway is done): Vercel (GitHub
+  deployment URL), Northflank/GovPaaS (CLI/API; may need a self-hosted runner
+  if previews are internal-only). Add one "Find preview URL" step each.
 - **Lighthouse scan in CI** for accessibility and performance against the
   preview URL (OGP caught a 5MB icon this way). Depends on preview.yml.
 - **`needs-human` label** for PRs touching risky paths (auth, tenancy/RLS,

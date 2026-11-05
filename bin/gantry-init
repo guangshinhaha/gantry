@@ -27,6 +27,7 @@ copy() { # src dest
 echo "gantry → $(pwd)"
 copy "$GANTRY_DIR/template/lefthook.yml" lefthook.yml
 copy "$GANTRY_DIR/template/.github/workflows/ci.yml" .github/workflows/ci.yml
+copy "$GANTRY_DIR/template/.github/workflows/preview.yml" .github/workflows/preview.yml
 copy "$GANTRY_DIR/template/CLAUDE.md" CLAUDE.md
 
 # Mutation testing: on by default for single-package Vitest/Jest repos.
