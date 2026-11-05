@@ -1,0 +1,17 @@
+name: build
+# Docker build to GHCR. PRs build only; main pushes sha-<short> and latest.
+# Added by `gantry-init --docker`. Skips itself without a Dockerfile.
+on:
+  pull_request:
+    paths-ignore: ["docs/**", "**/*.md"]
+  push:
+    branches: [main]
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  build:
+    uses: guangshinhaha/gantry/.github/workflows/build.yml@main
+    permissions:
+      contents: read
+      packages: write # used only by the push job, on main

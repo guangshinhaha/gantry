@@ -2,17 +2,18 @@
 # Apply gantry to a repo: lefthook.yml, CI workflow, CLAUDE.md skeleton.
 # Never overwrites existing files. Safe to re-run.
 #
-#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation]
+#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation] [--docker]
 set -e
 
 GANTRY_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="."
-PRISMA=0; NEXTJS=0; MUTATION=1
+PRISMA=0; NEXTJS=0; MUTATION=1; DOCKER=0
 for arg in "$@"; do
   case "$arg" in
     --prisma) PRISMA=1 ;;
     --nextjs) NEXTJS=1 ;;
     --no-mutation) MUTATION=0 ;;
+    --docker) DOCKER=1 ;;
     *) TARGET="$arg" ;;
   esac
 done
@@ -28,6 +29,9 @@ echo "gantry → $(pwd)"
 copy "$GANTRY_DIR/template/lefthook.yml" lefthook.yml
 copy "$GANTRY_DIR/template/.github/workflows/ci.yml" .github/workflows/ci.yml
 copy "$GANTRY_DIR/template/CLAUDE.md" CLAUDE.md
+
+# Docker build to GHCR: opt-in.
+[ "$DOCKER" = 1 ] && copy "$GANTRY_DIR/template/.github/workflows/build.yml" .github/workflows/build.yml
 
 # Mutation testing: on by default for single-package Vitest/Jest repos.
 if [ "$MUTATION" = 1 ] && [ -f package.json ]; then

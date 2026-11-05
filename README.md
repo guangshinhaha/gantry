@@ -31,6 +31,10 @@ levels, each harder to get around than the last:
 - **Mutation testing** on the files the PR changed (see below). Survivors are
   posted as a PR comment.
 - Optional: Playwright end-to-end tests.
+- Optional (`--docker`): **Docker build**. PRs build the `Dockerfile` without
+  pushing, to catch breakage. Pushes to `main` publish
+  `ghcr.io/<owner>/<repo>` tagged `sha-<short>` and `latest`. Skips without a
+  Dockerfile.
 
 **Optional extras** for some stacks
 - `prisma`: blocks raw-SQL escape hatches (`$queryRawUnsafe`, `Prisma.raw()`);
@@ -88,7 +92,7 @@ applies gantry, writes a starting CLAUDE.md, and asks before pushing.
 **Existing repo:**
 
 ```sh
-~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation]
+~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation] [--docker]
 git add -A && git commit -m "Add gantry checks"
 ```
 
@@ -101,6 +105,7 @@ again. It adds:
 | `.github/workflows/ci.yml` | A few lines that call gantry's shared CI. |
 | `.github/workflows/mutation.yml` | A few lines that call gantry's mutation testing. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
+| `.github/workflows/build.yml` | Only with `--docker`: calls gantry's Docker build to GHCR. |
 | `CLAUDE.md` | A starting template: commands, gates, review rules. |
 
 Repos that use husky are left alone, with instructions for switching.
@@ -115,6 +120,7 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
 .github/workflows/
   ci.yml        shared CI that repos call
   mutation.yml  shared mutation testing that repos call
+  build.yml     shared Docker build to GHCR (opt-in via --docker)
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
 scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
