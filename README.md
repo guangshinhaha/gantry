@@ -30,6 +30,8 @@ levels, each harder to get around than the last:
 - The same checks again on a clean machine: secrets, lint, typecheck, tests, audit.
 - **Mutation testing** on the files the PR changed (see below). Survivors are
   posted as a PR comment.
+- **`needs-human` label** when the PR touches a risky path (auth, migrations,
+  payments, API keys, RLS). See below.
 - Optional: Playwright end-to-end tests.
 
 **Optional extras** for some stacks
@@ -80,6 +82,28 @@ It's on by default for Vitest and Jest repos. It's off for node:test (too slow
 under Stryker), monorepos and repos without tests. It reports only and never
 blocks a merge, unless you set `thresholds.break` in `stryker.config.mjs`.
 
+## Risky paths
+
+Some changes deserve a human look however green CI is. List the paths in
+`.github/gantry-risky-paths` (one glob per line, `#` for comments):
+
+```
+**/auth/**
+**/migrations/**
+prisma/schema.prisma
+```
+
+When a PR changes a matching file, gantry adds the `needs-human` label (creating
+it if missing) and keeps one comment listing the matched files and which glob
+hit. When the PR no longer matches, the label and comment are removed.
+
+- The list is read from the **base branch**, so a PR can't switch the check off
+  by editing it. A new list takes effect once it is merged.
+- Off when the file is absent. `gantry-init` copies a commented example.
+- **Same-repo PRs only.** Fork PRs get a read-only token and can't be labelled
+  or commented on, so the check skips them.
+- It labels only; it doesn't block merging.
+
 ## Using it
 
 **New repo:** in Claude Code, run `/new-repo <git link>`. It clones the repo,
@@ -100,6 +124,8 @@ again. It adds:
 | `lefthook.yml` | Local hooks. Points at this repo, so updates arrive automatically (re-fetched daily). |
 | `.github/workflows/ci.yml` | A few lines that call gantry's shared CI. |
 | `.github/workflows/mutation.yml` | A few lines that call gantry's mutation testing. |
+| `.github/workflows/risky-paths.yml` | A few lines that call gantry's `needs-human` labelling. |
+| `.github/gantry-risky-paths` | Example list of risky globs. Edit to fit the repo. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
 | `CLAUDE.md` | A starting template: commands, gates, review rules. |
 
@@ -115,9 +141,11 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
 .github/workflows/
   ci.yml        shared CI that repos call
   mutation.yml  shared mutation testing that repos call
+  risky-paths.yml  shared needs-human labelling that repos call
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
 scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
+                risky-paths.mjs: glob matching for needs-human (tests in scripts/test/)
 BACKLOG.md      ideas not built yet
 ```
 

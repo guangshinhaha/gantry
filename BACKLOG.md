@@ -16,8 +16,6 @@ Ideas waiting for Shin's go. Not implemented.
   deployment URL). Pilot: notifysg's next PR (PR environments enabled).
 - **Lighthouse scan in CI** for accessibility and performance against the
   preview URL (OGP caught a 5MB icon this way). Depends on preview.yml.
-- **`needs-human` label** for PRs touching risky paths (auth, tenancy/RLS,
-  payments, API keys, migrations), listed per repo.
 - **Automated second review** on every PR (dx-code-review or codex).
 - **Acceptance criteria check**: PR template lists the issue's ACs; CI fails
   on unticked ones.

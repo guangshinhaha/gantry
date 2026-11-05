@@ -1,0 +1,95 @@
+# gantry risky paths. Call it from a repo with:
+#
+#   jobs:
+#     risky-paths:
+#       uses: guangshinhaha/gantry/.github/workflows/risky-paths.yml@main
+#
+# Reads .github/gantry-risky-paths (one glob per line, `#` comments) from the
+# PR's BASE branch, so a PR cannot switch the check off by editing the list.
+# If a changed file matches, adds the `needs-human` label and keeps one sticky
+# comment listing the matched files and globs. If nothing matches (any more),
+# removes both. Skips itself when the list is absent or the PR is from a fork
+# (forks get a read-only token, so it cannot label or comment).
+name: gantry-risky-paths
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: '"ubuntu-latest"'
+      gantry-ref:
+        description: gantry ref for the matching script
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  risky-paths:
+    if: ${{ github.event.pull_request && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }} # trusted list; PR code is never run
+
+      - name: Match changed files
+        id: scan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          list=.github/gantry-risky-paths
+          if [ ! -f "$list" ]; then
+            echo "No $list on the base branch: risky-paths check is off for this repo."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${{ inputs.gantry-ref }}/scripts/risky-paths.mjs" -o /tmp/risky-paths.mjs
+          # Include old names of renamed files, so moving a file out of a risky path is still caught.
+          gh api "repos/${{ github.repository }}/pulls/$PR/files" --paginate \
+            --jq '.[] | .filename, (.previous_filename // empty)' > /tmp/changed.txt
+          node /tmp/risky-paths.mjs "$list" /tmp/changed.txt > /tmp/matches.md
+          if [ -s /tmp/matches.md ]; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "<!-- gantry-risky-paths -->"
+              echo "### Needs a human look"
+              echo
+              echo "This PR touches paths listed in \`.github/gantry-risky-paths\`. Green CI is not enough here; review these by hand."
+              echo
+              cat /tmp/matches.md
+            } > /tmp/risky-comment.md
+            cat /tmp/risky-comment.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "match=false" >> "$GITHUB_OUTPUT"
+            echo "No risky paths touched."
+          fi
+
+      - name: Label and comment
+        if: steps.scan.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          MATCH: ${{ steps.scan.outputs.match }}
+        run: |
+          id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- gantry-risky-paths -->")) | .id' | head -1)
+          if [ "$MATCH" = true ]; then
+            gh label create needs-human --force --color D93F0B \
+              --description "Touches risky paths: needs a human review" -R "${{ github.repository }}"
+            gh pr edit "$PR" --add-label needs-human -R "${{ github.repository }}"
+            if [ -n "$id" ]; then
+              gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@/tmp/risky-comment.md >/dev/null
+            else
+              gh api "repos/${{ github.repository }}/issues/$PR/comments" -F body=@/tmp/risky-comment.md >/dev/null
+            fi
+          else
+            gh pr edit "$PR" --remove-label needs-human -R "${{ github.repository }}" || true
+            [ -n "$id" ] && gh api -X DELETE "repos/${{ github.repository }}/issues/comments/$id"
+            true
+          fi
