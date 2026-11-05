@@ -147,10 +147,14 @@ never comes up, or is stuck on an older commit, the job fails after
 3. Tag the tests worth running on every PR `@smoke`
    (`test('home loads @smoke', ...)`) and set `use: { screenshot: 'on' }` in
    `playwright.config.ts` so there are screenshots to post.
-4. `gantry-init` adds `.github/workflows/preview.yml`; or copy it from `template/`.
+4. `gantry-init` adds `.github/workflows/preview.yml` only when it finds
+   `railway.json`/`railway.toml` (railway) or `vercel.json`/`.vercel` (vercel), and writes
+   that platform into the caller. Otherwise it prints a skip line; add it with
+   `gantry-init --preview railway` (or `vercel`). There is no default platform.
 
 Without the secret (including PRs from forks) or without `@smoke` tests, the
-job skips itself. Inputs: `platform`, `smoke-command`, `timeout-minutes`,
+job skips itself and says why: `Skipped: <reason>` in the job summary plus a
+notice annotation on the run, so a green check is never silent. Inputs: `platform` (required), `smoke-command`, `timeout-minutes`,
 `railway-project-id`, `railway-service`.
 
 **Vercel** (`platform: vercel`): no token needed. The job reads the GitHub

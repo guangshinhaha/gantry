@@ -2,14 +2,20 @@
 # Apply gantry to a repo: lefthook.yml, CI workflow, CLAUDE.md skeleton.
 # Never overwrites existing files. Safe to re-run.
 #
-#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker]
+#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--preview [railway|vercel]]
 set -e
 
 GANTRY_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="."
-PRISMA=0; NEXTJS=0; MUTATION=1; REVIEW=0; DOCKER=0
+PREVIEW=""; PREVIEW_FLAG=0; PRISMA=0; NEXTJS=0; MUTATION=1; REVIEW=0; DOCKER=0
+WANT_PV=0
 for arg in "$@"; do
+  if [ "$WANT_PV" = 1 ]; then
+    WANT_PV=0
+    case "$arg" in railway|vercel) PREVIEW="$arg"; continue ;; esac
+  fi
   case "$arg" in
+    --preview) PREVIEW_FLAG=1; WANT_PV=1 ;;
     --prisma) PRISMA=1 ;;
     --nextjs) NEXTJS=1 ;;
     --no-mutation) MUTATION=0 ;;
@@ -29,7 +35,22 @@ copy() { # src dest
 echo "gantry → $(pwd)"
 copy "$GANTRY_DIR/template/lefthook.yml" lefthook.yml
 copy "$GANTRY_DIR/template/.github/workflows/ci.yml" .github/workflows/ci.yml
-copy "$GANTRY_DIR/template/.github/workflows/preview.yml" .github/workflows/preview.yml
+
+# Preview smoke tests: only when we know the platform (detected or --preview).
+if [ -z "$PREVIEW" ]; then
+  if [ -f railway.json ] || [ -f railway.toml ]; then PREVIEW=railway
+  elif [ -f vercel.json ] || [ -e .vercel ]; then PREVIEW=vercel; fi
+fi
+if [ -n "$PREVIEW" ]; then
+  if [ -e .github/workflows/preview.yml ]; then echo "  keep   .github/workflows/preview.yml (exists)"
+  else
+    mkdir -p .github/workflows
+    sed "s|__PLATFORM__|$PREVIEW|" "$GANTRY_DIR/template/.github/workflows/preview.yml" > .github/workflows/preview.yml
+    echo "  add    .github/workflows/preview.yml (platform: $PREVIEW)"
+  fi
+elif [ -e .github/workflows/preview.yml ]; then echo "  keep   .github/workflows/preview.yml (exists)"
+else echo "  skip   preview smoke tests (no railway.json/vercel.json found; add with: gantry-init --preview railway|vercel)"
+fi
 copy "$GANTRY_DIR/template/.github/workflows/risky-paths.yml" .github/workflows/risky-paths.yml
 copy "$GANTRY_DIR/template/gantry-risky-paths" .github/gantry-risky-paths
 copy "$GANTRY_DIR/template/.github/workflows/ac-check.yml" .github/workflows/ac-check.yml
