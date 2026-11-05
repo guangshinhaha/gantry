@@ -45,3 +45,18 @@ Northflank equivalent is likely the build/deployment `sha` on the service, uncon
    VPN (phone hotspot). Reachable = adapter can be built like `scripts/preview-railway.mjs`.
 2. If not reachable, build the adapter to run on the self-hosted runner (#12).
 3. Either way, confirm one real `GET .../services/{id}` response to pin field names.
+
+## Update 2026-11-05: checked with the Northflank CLI (read-only)
+
+- **Reachable.** A service in `sums-dev` exposes a public port on the default
+  `*.code.run` domain with no IP policy, credentials or SSO. `curl -I` from a
+  laptop with no VPN returned HTTP 200, so GitHub-hosted runners should reach
+  it too. A self-hosted runner (#12) is not needed for this.
+- **No previews exist yet.** Org `moe-dxd-tfx` has 7 projects, one fixed
+  environment each (built from `northflank/template.json`-style templates) and
+  no pipelines in the five I checked, so there is nothing for an adapter to find.
+- **Route if wanted later:** per-branch auto-deploy on a service gives each PR
+  branch its own URL. Not checked: whether our GovPaaS plan allows it.
+  Then add a `northflank` URL-discovery step to `preview.yml` that maps the PR
+  branch to its service URL.
+- **Decision:** shelved. Low priority; not building the adapter now.
