@@ -18,6 +18,14 @@ Ideas waiting for Shin's go. Not implemented.
 - **Northflank/GovPaaS preview adapter** for `preview.yml` (Railway and Vercel
   are done). Previews are publicly reachable but GovPaaS has no PR previews
   yet; see `docs/spikes/northflank-preview-reachability.md`. Shelved.
+- **Complexity check** in CI and hooks (ESLint `complexity` or similar). Pure
+  gate, no secrets. From the OGP session (Nov 3).
+- **Visual before/after diffs** on the preview screenshots (OGP uses Chromatic),
+  so UI review is a glance. Needs a baseline store. Check PDPA before sending
+  screenshots to a third party.
+- **Multiple LLM reviewers + a comment resolver.** Extends the opt-in Claude
+  review: several reviewers comment, then a skill synthesises and resolves
+  (`ce-resolve-pr-feedback` already covers the resolving half).
 
 ## Infra
 
@@ -26,6 +34,9 @@ Ideas waiting for Shin's go. Not implemented.
   require it or a CPU-bound suite needs more than 2 vCPUs (notifysg: ~18 min).
 - **Auto-kill survivors** with claude-code-action on a `kill-mutants` label
   (costs API usage; do it by hand first).
+- **Observability as code** (OGP): monitors, dashboards and SLOs live in the
+  repo and update when the schema or log lines change; alerts to Slack. Bigger
+  than a CI check; decide Datadog vs Grafana first.
 
 ## Notes
 
