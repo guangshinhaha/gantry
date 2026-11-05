@@ -23,9 +23,9 @@ on:
   workflow_call:
     inputs:
       platform:
-        description: Where PR previews live. "railway" or "vercel".
+        description: Where PR previews live. "railway" or "vercel". Set by gantry-init from detection.
         type: string
-        default: railway
+        required: true
       smoke-command:
         type: string
         default: npx playwright test --grep @smoke
@@ -101,14 +101,18 @@ jobs:
             vercel) [ "$IS_FORK" = false ] && have=1 || have=0; name="a same-repo PR (fork PRs are skipped)" ;;
             *) echo "::error::Unknown platform '$PLATFORM'."; exit 1 ;;
           esac
-          if [ "$have" = 0 ]; then
-            echo "No $name: preview smoke tests are off here."
+          skip() { # reason: visible on the run page and the job summary, not only in the log
+            echo "Skipped: $1"
+            echo "::notice title=Preview skipped::$1"
+            echo "Skipped: $1" >> "$GITHUB_STEP_SUMMARY"
             echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          }
+          if [ "$have" = 0 ]; then
+            skip "no $name, so preview smoke tests are off here."
           fi
           if ! grep -rqs --include='*.ts' --include='*.js' --include='*.mjs' --include='*.tsx' \
               --exclude-dir=node_modules --exclude-dir=.git '@smoke' .; then
-            echo "No @smoke tests: preview smoke tests are off for this repo."
-            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+            skip "no @smoke tests found, so preview smoke tests are off for this repo."
           fi
           echo "run=true" >> "$GITHUB_OUTPUT"
 

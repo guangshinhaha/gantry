@@ -1,7 +1,7 @@
 name: preview
 # Smoke-tests each PR's preview deployment (Playwright tests tagged @smoke).
-# Set platform to railway or vercel. Skips itself without the platform secret
-# (Railway) or without @smoke tests.
+# platform is railway or vercel. Skips itself (with a visible "Skipped: reason" in the job summary) when the platform
+# secret (Railway) or @smoke tests are missing.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -14,7 +14,7 @@ jobs:
     if: ${{ !github.event.pull_request.draft }}
     uses: guangshinhaha/gantry/.github/workflows/preview.yml@main
     with:
-      platform: railway
+      platform: __PLATFORM__ # gantry-init fills this in (railway or vercel)
       # lighthouse: true            # report-only scan after smoke passes
       # lighthouse-urls: "/ /login"  # paths to scan (default /)
       # lighthouse-min-a11y: 90     # fail below this accessibility score
