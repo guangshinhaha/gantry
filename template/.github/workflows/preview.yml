@@ -1,0 +1,20 @@
+name: preview
+# Smoke-tests each PR's preview deployment (Playwright tests tagged @smoke).
+# Skips itself without the RAILWAY_TOKEN secret or without @smoke tests.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ["docs/**", "**/*.md"]
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  preview:
+    if: ${{ !github.event.pull_request.draft }}
+    uses: guangshinhaha/gantry/.github/workflows/preview.yml@main
+    with:
+      platform: railway
+    secrets: inherit
+    permissions:
+      contents: read
+      pull-requests: write

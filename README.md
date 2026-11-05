@@ -31,6 +31,10 @@ levels, each harder to get around than the last:
 - **Mutation testing** on the files the PR changed (see below). Survivors are
   posted as a PR comment.
 - Optional: Playwright end-to-end tests.
+- **Preview smoke tests** (Railway): once the PR's preview is live on the PR's
+  latest commit, Playwright `@smoke` tests run against it. Screenshots are
+  uploaded and one PR comment (updated on every push) shows pass or fail. See
+  below.
 
 **Optional extras** for some stacks
 - `prisma`: blocks raw-SQL escape hatches (`$queryRawUnsafe`, `Prisma.raw()`);
@@ -80,6 +84,31 @@ It's on by default for Vitest and Jest repos. It's off for node:test (too slow
 under Stryker), monorepos and repos without tests. It reports only and never
 blocks a merge, unless you set `thresholds.break` in `stryker.config.mjs`.
 
+## Preview smoke tests
+
+CI tests the code; this tests the deployed app. For each PR, `preview.yml`
+finds the Railway preview URL through the Railway API (the GitHub deployment
+URL only points at the dashboard), waits until the deployment is `SUCCESS` on
+the PR head commit and answers HTTP 200, then runs
+`npx playwright test --grep @smoke` with `BASE_URL` set to it. If the preview
+never comes up, or is stuck on an older commit, the job fails after
+`timeout-minutes` (default 10) and the PR comment says why.
+
+**Setup, per repo**
+1. In Railway, enable PR environments (Project Settings, Environments) and make
+   sure the service has a public domain.
+2. Add a `RAILWAY_TOKEN` repo secret. A project token works if it covers the
+   PR environments; otherwise use an account/workspace token and pass
+   `railway-project-id` in the caller's `with:`.
+3. Tag the tests worth running on every PR `@smoke`
+   (`test('home loads @smoke', ...)`) and set `use: { screenshot: 'on' }` in
+   `playwright.config.ts` so there are screenshots to post.
+4. `gantry-init` adds `.github/workflows/preview.yml`; or copy it from `template/`.
+
+Without the secret (including PRs from forks) or without `@smoke` tests, the
+job skips itself. Inputs: `platform`, `smoke-command`, `timeout-minutes`,
+`railway-project-id`, `railway-service`.
+
 ## Using it
 
 **New repo:** in Claude Code, run `/new-repo <git link>`. It clones the repo,
@@ -100,6 +129,7 @@ again. It adds:
 | `lefthook.yml` | Local hooks. Points at this repo, so updates arrive automatically (re-fetched daily). |
 | `.github/workflows/ci.yml` | A few lines that call gantry's shared CI. |
 | `.github/workflows/mutation.yml` | A few lines that call gantry's mutation testing. |
+| `.github/workflows/preview.yml` | A few lines that call gantry's preview smoke tests. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
 | `CLAUDE.md` | A starting template: commands, gates, review rules. |
 
@@ -115,9 +145,12 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
 .github/workflows/
   ci.yml        shared CI that repos call
   mutation.yml  shared mutation testing that repos call
+  preview.yml   shared preview smoke tests. Platform-neutral; the only
+                platform-specific part is one "Find preview URL" step
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
 scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
+                preview-railway.mjs: Railway adapter, finds and checks the preview URL
 BACKLOG.md      ideas not built yet
 ```
 
@@ -129,5 +162,5 @@ To run CI on your own machine instead of GitHub's, pass
 
 ## Next
 
-See [BACKLOG.md](BACKLOG.md): blocking merges on red CI, a preview deploy for
-every PR with smoke tests, Lighthouse scans, and automatic survivor-killing.
+See [BACKLOG.md](BACKLOG.md): blocking merges on red CI, Vercel and Northflank preview
+adapters, Lighthouse scans, and automatic survivor-killing.

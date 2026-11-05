@@ -1,0 +1,197 @@
+# gantry preview smoke tests. Call it from a repo with:
+#
+#   jobs:
+#     preview:
+#       uses: guangshinhaha/gantry/.github/workflows/preview.yml@main
+#       with: { platform: railway }
+#       secrets: inherit
+#
+# Waits for the PR's preview deployment, runs Playwright @smoke tests against
+# it, uploads screenshots and posts ONE sticky PR comment (updated per push).
+# Skips itself when the platform secret is missing (forks too) or the repo has
+# no @smoke tests.
+#
+# Adding a platform: add a `Find preview URL (<platform>)` step below that
+# writes `url` (and optionally `sha`) to $GITHUB_OUTPUT and fails with a
+# one-line reason. Nothing else changes. Then add the secret to the
+# `secrets:` block and to `have-secret`.
+name: gantry-preview
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Where PR previews live. Only "railway" for now.
+        type: string
+        default: railway
+      smoke-command:
+        type: string
+        default: npx playwright test --grep @smoke
+      timeout-minutes:
+        description: How long to wait for the preview to come up on the PR head SHA
+        type: number
+        default: 10
+      runs-on:
+        type: string
+        default: '"ubuntu-latest"'
+      node-version:
+        type: string
+        default: "22"
+      railway-project-id:
+        description: Railway project id. Needed for account/workspace tokens; project tokens carry their own.
+        type: string
+        default: ""
+      railway-service:
+        description: Railway service name, when the project has several
+        type: string
+        default: ""
+      gantry-ref:
+        description: gantry ref for the adapter scripts
+        type: string
+        default: main
+    secrets:
+      RAILWAY_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  preview:
+    if: ${{ github.event.pull_request && !github.event.pull_request.draft }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 40 # backstop; inputs.timeout-minutes bounds the wait
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Check there is something to do
+        id: gate
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          case "$PLATFORM" in
+            railway) [ -n "$RAILWAY_TOKEN" ] && have=1 || have=0; name=RAILWAY_TOKEN ;;
+            *) echo "::error::Unknown platform '$PLATFORM'."; exit 1 ;;
+          esac
+          if [ "$have" = 0 ]; then
+            echo "No $name: preview smoke tests are off for this repo."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! grep -rqs --include='*.ts' --include='*.js' --include='*.mjs' --include='*.tsx' \
+              --exclude-dir=node_modules --exclude-dir=.git '@smoke' .; then
+            echo "No @smoke tests: preview smoke tests are off for this repo."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      # ---- URL discovery: one step per platform -------------------------
+      # Contract: output `url`; optional `sha`. Must itself wait until the
+      # preview serves the PR head SHA, and fail with a one-line reason.
+      - name: Find preview URL (railway)
+        if: steps.gate.outputs.run == 'true' && inputs.platform == 'railway'
+        id: url-railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ inputs.railway-project-id }}
+          RAILWAY_SERVICE: ${{ inputs.railway-service }}
+          PR_NUMBER: ${{ env.PR }}
+          TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+          GANTRY_REF: ${{ inputs.gantry-ref }}
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/preview-railway.mjs" -o /tmp/preview-railway.mjs
+          node /tmp/preview-railway.mjs 2>&1 | tee /tmp/preview-adapter.log
+          exit "${PIPESTATUS[0]}"
+      # ---- end URL discovery ---------------------------------------------
+
+      - name: Wait until the URL answers 200
+        if: steps.gate.outputs.run == 'true' && steps.url-railway.outcome == 'success'
+        id: live
+        env:
+          URL: ${{ steps.url-railway.outputs.url }}
+          MINUTES: ${{ inputs.timeout-minutes }}
+        run: |
+          end=$(( $(date +%s) + MINUTES * 60 ))
+          while :; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 15 "$URL" || true)
+            [ "$code" = 200 ] && break
+            echo "waiting: $URL answered ${code:-no response}"
+            if [ "$(date +%s)" -ge "$end" ]; then
+              echo "Preview $URL never answered 200 (last: ${code:-no response})." > /tmp/preview-adapter.log
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "$URL answers 200"
+
+      - name: Install
+        if: steps.live.outcome == 'success'
+        run: |
+          if [ -f pnpm-lock.yaml ]; then corepack enable && pnpm install --frozen-lockfile
+          elif [ -f package-lock.json ]; then npm ci
+          else npm install; fi
+          npx playwright install --with-deps chromium
+
+      - name: Smoke tests
+        if: steps.live.outcome == 'success'
+        id: smoke
+        env:
+          BASE_URL: ${{ steps.url-railway.outputs.url }}
+          SMOKE: ${{ inputs.smoke-command }}
+        run: bash -c "$SMOKE"
+
+      - name: Upload screenshots and report
+        if: always() && steps.live.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-smoke
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+
+      - name: Comment on PR
+        if: always() && steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          URL: ${{ steps.url-railway.outputs.url }}
+          FOUND: ${{ steps.url-railway.outcome }}
+          LIVE: ${{ steps.live.outcome }}
+          SMOKE: ${{ steps.smoke.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          reason=$(tail -n 1 /tmp/preview-adapter.log 2>/dev/null || true)
+          {
+            echo "<!-- gantry-preview -->"
+            echo "### Preview smoke tests"
+            if [ "$SMOKE" = success ]; then
+              echo "✅ **Passed** on [$URL]($URL) at \`${HEAD_SHA:0:7}\`."
+            elif [ "$SMOKE" = failure ]; then
+              echo "❌ **Smoke tests failed** on [$URL]($URL) at \`${HEAD_SHA:0:7}\`."
+            elif [ "$FOUND" = failure ] || [ "$LIVE" = failure ]; then
+              echo "❌ **Preview did not come up** for \`${HEAD_SHA:0:7}\`: ${reason:-see the run log}"
+            else
+              echo "⚠️ Cancelled or did not finish for \`${HEAD_SHA:0:7}\`."
+            fi
+            echo
+            echo "<sub>Screenshots and report: **preview-smoke** artifact on [this run]($RUN_URL).</sub>"
+          } > /tmp/preview-comment.md
+          cat /tmp/preview-comment.md >> "$GITHUB_STEP_SUMMARY"
+          id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- gantry-preview -->")) | .id' | head -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@/tmp/preview-comment.md >/dev/null
+          else
+            gh api "repos/${{ github.repository }}/issues/$PR/comments" -F body=@/tmp/preview-comment.md >/dev/null
+          fi
