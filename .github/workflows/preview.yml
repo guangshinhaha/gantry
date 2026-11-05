@@ -8,6 +8,8 @@
 #
 # Waits for the PR's preview deployment, runs Playwright @smoke tests against
 # it, uploads screenshots and posts ONE sticky PR comment (updated per push).
+# Optional: `lighthouse: true` adds a Lighthouse scan (scores + top failing
+# audits) to the same comment; report-only unless `lighthouse-min-a11y` is set.
 # Skips itself when the platform secret is missing (forks too) or the repo has
 # no @smoke tests.
 #
@@ -43,6 +45,18 @@ on:
         default: ""
       railway-service:
         description: Railway service name, when the project has several
+        type: string
+        default: ""
+      lighthouse:
+        description: Run a report-only Lighthouse scan on the preview after smoke passes
+        type: boolean
+        default: false
+      lighthouse-urls:
+        description: Paths to scan, space or newline separated, relative to the preview URL
+        type: string
+        default: /
+      lighthouse-min-a11y:
+        description: Fail the job when any scanned URL's accessibility score (0-100) is below this. Empty means report only.
         type: string
         default: ""
       gantry-ref:
@@ -191,6 +205,31 @@ jobs:
             playwright-report/
           if-no-files-found: ignore
 
+      - name: Lighthouse
+        if: inputs.lighthouse && steps.smoke.outcome == 'success'
+        id: lh
+        continue-on-error: true
+        env:
+          BASE: ${{ steps.url-railway.outputs.url }}
+          PATHS: ${{ inputs.lighthouse-urls }}
+          MIN_A11Y: ${{ inputs.lighthouse-min-a11y }}
+          GANTRY_REF: ${{ inputs.gantry-ref }}
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/lighthouse-report.mjs" -o /tmp/lighthouse-report.mjs
+          args=()
+          for p in $PATHS; do args+=("--url=${BASE%/}/${p#/}"); done
+          npx --yes @lhci/cli@0.16 collect --numberOfRuns=1 \
+            --settings.chromeFlags="--no-sandbox --headless=new" "${args[@]}"
+          node /tmp/lighthouse-report.mjs .lighthouseci /tmp/lighthouse-comment.md
+
+      - name: Upload Lighthouse reports
+        if: always() && steps.lh.outcome != 'skipped' && inputs.lighthouse
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-lighthouse
+          path: .lighthouseci/
+          if-no-files-found: ignore
+
       - name: Comment on PR
         if: always() && steps.gate.outputs.run == 'true'
         env:
@@ -199,6 +238,7 @@ jobs:
           FOUND: ${{ (steps.url-railway.outcome == 'failure' || steps.url-vercel.outcome == 'failure') && 'failure' || 'ok' }}
           LIVE: ${{ steps.live.outcome }}
           SMOKE: ${{ steps.smoke.outcome }}
+          LH: ${{ steps.lh.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           reason=$(tail -n 1 /tmp/preview-adapter.log 2>/dev/null || true)
@@ -214,6 +254,14 @@ jobs:
             else
               echo "⚠️ Cancelled or did not finish for \`${HEAD_SHA:0:7}\`."
             fi
+            if [ "$LH" = success ] && [ -f /tmp/lighthouse-comment.md ]; then
+              echo
+              cat /tmp/lighthouse-comment.md
+            elif [ "$LH" = failure ]; then
+              echo
+              echo "#### Lighthouse"
+              echo "⚠️ The scan did not complete; see the run log."
+            fi
             echo
             echo "<sub>Screenshots and report: **preview-smoke** artifact on [this run]($RUN_URL).</sub>"
           } > /tmp/preview-comment.md
@@ -225,3 +273,9 @@ jobs:
           else
             gh api "repos/${{ github.repository }}/issues/$PR/comments" -F body=@/tmp/preview-comment.md >/dev/null
           fi
+
+      - name: Enforce Lighthouse accessibility minimum
+        if: always() && steps.lh.outputs.a11y_fail == 'true'
+        run: |
+          echo "::error::Lighthouse accessibility score is below lighthouse-min-a11y."
+          exit 1
