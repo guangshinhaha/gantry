@@ -122,6 +122,10 @@ kill a mutant. If a change makes no real difference, it marks the line
 It's on by default for Vitest and Jest repos. It's off for node:test (too slow
 under Stryker), monorepos and repos without tests. It reports only and never
 blocks a merge, unless you set `thresholds.break` in `stryker.config.mjs`.
+Two cases stay green and are explained in the comment: changed files that no
+test covers (it names them), and existing tests that already fail (mutation
+testing is skipped; the test job reports the failures). Only a real miss of
+`thresholds.break` turns the check red.
 
 ## Preview smoke tests
 
