@@ -15,9 +15,7 @@ Ideas waiting for Shin's go. Not implemented.
 
 ## Merge confidence
 
-- **Northflank/GovPaaS preview adapter** for `preview.yml` (Railway and Vercel
-  are done). Previews are publicly reachable but GovPaaS has no PR previews
-  yet; see `docs/spikes/northflank-preview-reachability.md`. Shelved.
+- **GovPaaS per-PR previews**: tracked in issue #5 (blocked on a permission).
 - **Complexity check** in CI and hooks (ESLint `complexity` or similar). Pure
   gate, no secrets. From the OGP session (Nov 3).
 - **Visual before/after diffs** on the preview screenshots (OGP uses Chromatic),
