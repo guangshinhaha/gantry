@@ -6,7 +6,8 @@
 #
 # On a PR: mutates only the source files the PR changed, posts surviving
 # mutants as a PR comment, uploads the HTML report. Report-only unless the
-# repo's stryker config sets thresholds.break.
+# repo's stryker config sets thresholds.break. Cases with no covering tests, or
+# failing tests, are explained in the comment and stay green.
 # Manual run (workflow_dispatch): mutates everything in the config's `mutate`.
 # Skips itself when the repo has no stryker config.
 name: gantry-mutation
@@ -120,30 +121,31 @@ jobs:
           MUTATE: ${{ steps.scope.outputs.mutate }}
         run: |
           set +e
+          rm -rf reports/mutation # never summarise a stale report
           args="run --incremental --reporters html,json,clear-text"
           [ -n "$MUTATE" ] && args="$args --mutate $MUTATE"
-          timeout "${{ inputs.max-minutes }}m" npx stryker $args
-          rc=$?
+          timeout "${{ inputs.max-minutes }}m" npx stryker $args 2>&1 | tee /tmp/stryker.log
+          rc=${PIPESTATUS[0]}
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           if [ "$rc" = 124 ]; then echo "::warning::Stopped at the ${{ inputs.max-minutes }}-minute cap."; fi
           exit 0
 
       - name: Summarise
+        id: summary
         if: steps.scope.outputs.run == 'true'
         env:
           RC: ${{ steps.stryker.outputs.rc }}
           CAP: ${{ inputs.max-minutes }}
+          MUTATE: ${{ steps.scope.outputs.mutate }}
         run: |
           curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${{ inputs.gantry-ref }}/scripts/mutation-report.mjs" -o /tmp/mutation-report.mjs
+          node /tmp/mutation-report.mjs --classify --rc "$RC" --log /tmp/stryker.log > /tmp/kind
+          echo "kind=$(cat /tmp/kind)" >> "$GITHUB_OUTPUT"
           {
             echo "<!-- gantry-mutation -->"
             echo "### Mutation testing"
-            if [ "$RC" = 124 ]; then
-              echo "> ⏱ Stopped at the ${CAP}-minute cap, so there is no result. Split the PR, or run locally: \`npx stryker run --mutate <file>\`."
-            else
-              node /tmp/mutation-report.mjs reports/mutation/mutation.json
-              [ "$RC" != 0 ] && echo && echo "> ❌ Below the repo's \`thresholds.break\`."
-            fi
+            node /tmp/mutation-report.mjs reports/mutation/mutation.json \
+              --rc "$RC" --log /tmp/stryker.log --files "$MUTATE" --cap "$CAP"
             echo
             echo "<sub>Full report: **mutation-report** artifact on [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).</sub>"
           } > /tmp/mutation-comment.md
@@ -172,5 +174,5 @@ jobs:
           if-no-files-found: ignore
 
       - name: Fail if below thresholds.break
-        if: steps.scope.outputs.run == 'true' && steps.stryker.outputs.rc != '0' && steps.stryker.outputs.rc != '124'
+        if: steps.scope.outputs.run == 'true' && steps.summary.outputs.kind == 'below-break'
         run: exit 1
