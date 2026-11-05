@@ -32,6 +32,11 @@ levels, each harder to get around than the last:
   posted as a PR comment.
 - **`needs-human` label** when the PR touches a risky path (auth, migrations,
   payments, API keys, RLS). See below.
+- **Acceptance criteria:** if the PR says `Closes #N` and issue N has an
+  `Acceptance criteria` checklist, the PR body must repeat it with every item
+  ticked (and evidence). Unticked items fail the check, named; editing the
+  body re-runs it. Fewer items than the issue only warns. Skips drafts and PRs
+  with no such issue.
 - Optional: Playwright end-to-end tests.
 - **Preview smoke tests** (Railway or Vercel): once the PR's preview is live on the PR's
   latest commit, Playwright `@smoke` tests run against it. Screenshots are
@@ -240,6 +245,8 @@ again. It adds:
 | `.github/workflows/risky-paths.yml` | A few lines that call gantry's `needs-human` labelling. |
 | `.github/gantry-risky-paths` | Example list of risky globs. Edit to fit the repo. |
 | `.github/workflows/review.yml` | Second review by Claude. Only with `--review`. |
+| `.github/workflows/ac-check.yml` | A few lines that call gantry's acceptance-criteria check. |
+| `.github/pull_request_template.md` | PR template: `Closes #`, acceptance criteria, how I verified. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
 | `CLAUDE.md` | A starting template: commands, gates, review rules. |
 
@@ -261,6 +268,7 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
                 Optional Lighthouse step runs after smoke.
   risky-paths.yml  shared needs-human labelling that repos call
   review.yml    shared second review (claude-code-action) that repos call
+  ac-check.yml  shared acceptance-criteria check that repos call
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
 bin/gantry-protect requires gantry / ci-ok on the default branch (ruleset)
@@ -269,6 +277,7 @@ scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 preview-vercel.mjs: Vercel adapter, reads the GitHub deployment status
                 lighthouse-report.mjs: turns Lighthouse results into the PR comment section
                 risky-paths.mjs: glob matching for needs-human (tests in scripts/test/)
+                ac-check.mjs: parses PR/issue checklists (tests: ac-check.test.mjs)
 BACKLOG.md      ideas not built yet
 ```
 

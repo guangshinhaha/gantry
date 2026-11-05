@@ -1,0 +1,41 @@
+# gantry acceptance-criteria check. Call it from a repo with:
+#
+#   jobs:
+#     ac-check:
+#       uses: guangshinhaha/gantry/.github/workflows/ac-check.yml@main
+#
+# Reads Closes/Fixes/Resolves #N from the PR body. If issue N has an
+# "Acceptance criteria" checklist, fails unless the PR body has that section
+# with every item ticked. Skips drafts, and PRs with no such issue.
+name: gantry-ac-check
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: '"ubuntu-latest"'
+      gantry-ref:
+        description: gantry ref for the check script
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  ac-check:
+    if: ${{ github.event.pull_request && !github.event.pull_request.draft }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    steps:
+      - name: Check acceptance criteria
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${{ inputs.gantry-ref }}/scripts/ac-check.mjs" -o /tmp/ac-check.mjs
+          node /tmp/ac-check.mjs

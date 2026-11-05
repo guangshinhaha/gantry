@@ -31,6 +31,8 @@ copy "$GANTRY_DIR/template/.github/workflows/ci.yml" .github/workflows/ci.yml
 copy "$GANTRY_DIR/template/.github/workflows/preview.yml" .github/workflows/preview.yml
 copy "$GANTRY_DIR/template/.github/workflows/risky-paths.yml" .github/workflows/risky-paths.yml
 copy "$GANTRY_DIR/template/gantry-risky-paths" .github/gantry-risky-paths
+copy "$GANTRY_DIR/template/.github/workflows/ac-check.yml" .github/workflows/ac-check.yml
+copy "$GANTRY_DIR/template/.github/pull_request_template.md" .github/pull_request_template.md
 copy "$GANTRY_DIR/template/CLAUDE.md" CLAUDE.md
 
 # Mutation testing: on by default for single-package Vitest/Jest repos.

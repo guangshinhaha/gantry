@@ -7,8 +7,6 @@ Ideas waiting for Shin's go. Not implemented.
 - **Northflank/GovPaaS preview adapter** for `preview.yml` (Railway and Vercel
   are done). Previews are publicly reachable but GovPaaS has no PR previews
   yet; see `docs/spikes/northflank-preview-reachability.md`. Shelved.
-- **Acceptance criteria check**: PR template lists the issue's ACs; CI fails
-  on unticked ones.
 
 ## Infra
 
