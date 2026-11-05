@@ -1,6 +1,7 @@
 name: preview
 # Smoke-tests each PR's preview deployment (Playwright tests tagged @smoke).
-# Skips itself without the RAILWAY_TOKEN secret or without @smoke tests.
+# Set platform to railway or vercel. Skips itself without the platform secret
+# (Railway) or without @smoke tests.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -18,3 +19,4 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      deployments: read

@@ -13,15 +13,15 @@
 #
 # Adding a platform: add a `Find preview URL (<platform>)` step below that
 # writes `url` (and optionally `sha`) to $GITHUB_OUTPUT and fails with a
-# one-line reason. Nothing else changes. Then add the secret to the
-# `secrets:` block and to `have-secret`.
+# one-line reason, then list its step id in `Resolve preview URL` and in the
+# comment step's FOUND. Add any secret to the `secrets:` block and the gate.
 name: gantry-preview
 
 on:
   workflow_call:
     inputs:
       platform:
-        description: Where PR previews live. Only "railway" for now.
+        description: Where PR previews live. "railway" or "vercel".
         type: string
         default: railway
       smoke-command:
@@ -52,10 +52,14 @@ on:
     secrets:
       RAILWAY_TOKEN:
         required: false
+      VERCEL_AUTOMATION_BYPASS_SECRET:
+        description: Vercel Deployment Protection bypass secret (only if protection is on)
+        required: false
 
 permissions:
   contents: read
   pull-requests: write
+  deployments: read
 
 jobs:
   preview:
@@ -75,13 +79,16 @@ jobs:
         env:
           PLATFORM: ${{ inputs.platform }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           case "$PLATFORM" in
             railway) [ -n "$RAILWAY_TOKEN" ] && have=1 || have=0; name=RAILWAY_TOKEN ;;
+            # Vercel needs no secret to find the URL; forks need manual Vercel approval, so skip them.
+            vercel) [ "$IS_FORK" = false ] && have=1 || have=0; name="a same-repo PR (fork PRs are skipped)" ;;
             *) echo "::error::Unknown platform '$PLATFORM'."; exit 1 ;;
           esac
           if [ "$have" = 0 ]; then
-            echo "No $name: preview smoke tests are off for this repo."
+            echo "No $name: preview smoke tests are off here."
             echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if ! grep -rqs --include='*.ts' --include='*.js' --include='*.mjs' --include='*.tsx' \
@@ -113,18 +120,39 @@ jobs:
           curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/preview-railway.mjs" -o /tmp/preview-railway.mjs
           node /tmp/preview-railway.mjs 2>&1 | tee /tmp/preview-adapter.log
           exit "${PIPESTATUS[0]}"
+      - name: Find preview URL (vercel)
+        if: steps.gate.outputs.run == 'true' && inputs.platform == 'vercel'
+        id: url-vercel
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+          GANTRY_REF: ${{ inputs.gantry-ref }}
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/preview-vercel.mjs" -o /tmp/preview-vercel.mjs
+          node /tmp/preview-vercel.mjs 2>&1 | tee /tmp/preview-adapter.log
+          exit "${PIPESTATUS[0]}"
       # ---- end URL discovery ---------------------------------------------
 
+      - name: Resolve preview URL
+        if: steps.url-railway.outcome == 'success' || steps.url-vercel.outcome == 'success'
+        id: url
+        env:
+          URL: ${{ steps.url-railway.outputs.url || steps.url-vercel.outputs.url }}
+        run: echo "url=$URL" >> "$GITHUB_OUTPUT"
+
       - name: Wait until the URL answers 200
-        if: steps.gate.outputs.run == 'true' && steps.url-railway.outcome == 'success'
+        if: steps.url.outcome == 'success'
         id: live
         env:
-          URL: ${{ steps.url-railway.outputs.url }}
+          URL: ${{ steps.url.outputs.url }}
           MINUTES: ${{ inputs.timeout-minutes }}
+          # Vercel Deployment Protection bypass; empty means no header.
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
+          hdr=(); [ -n "$BYPASS" ] && hdr=(-H "x-vercel-protection-bypass: $BYPASS")
           end=$(( $(date +%s) + MINUTES * 60 ))
           while :; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 15 "$URL" || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 15 "${hdr[@]}" "$URL" || true)
             [ "$code" = 200 ] && break
             echo "waiting: $URL answered ${code:-no response}"
             if [ "$(date +%s)" -ge "$end" ]; then
@@ -147,7 +175,9 @@ jobs:
         if: steps.live.outcome == 'success'
         id: smoke
         env:
-          BASE_URL: ${{ steps.url-railway.outputs.url }}
+          BASE_URL: ${{ steps.url.outputs.url }}
+          # Read by the repo's playwright.config (see README) to send x-vercel-protection-bypass.
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           SMOKE: ${{ inputs.smoke-command }}
         run: bash -c "$SMOKE"
 
@@ -165,8 +195,8 @@ jobs:
         if: always() && steps.gate.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          URL: ${{ steps.url-railway.outputs.url }}
-          FOUND: ${{ steps.url-railway.outcome }}
+          URL: ${{ steps.url.outputs.url }}
+          FOUND: ${{ (steps.url-railway.outcome == 'failure' || steps.url-vercel.outcome == 'failure') && 'failure' || 'ok' }}
           LIVE: ${{ steps.live.outcome }}
           SMOKE: ${{ steps.smoke.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
