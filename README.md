@@ -23,11 +23,11 @@ levels, each harder to get around than the last:
 - **ESLint** on the staged files, if the repo uses ESLint.
 
 **On every push**
-- **Typecheck** (`tsc --noEmit`), **unit tests**, and a **dependency audit**
+- **Format check** (`format:check`, if the repo has it), **typecheck** (`tsc --noEmit`), **unit tests**, and a **dependency audit**
   (high severity and above, production dependencies only).
 
 **On every pull request** (GitHub Actions)
-- The same checks again on a clean machine: secrets, lint, typecheck, tests, audit.
+- The same checks again on a clean machine: secrets, lint, format check, typecheck, tests, audit.
 - **Mutation testing** on the files the PR changed (see below). Survivors are
   posted as a PR comment.
 - **`needs-human` label** when the PR touches a risky path (auth, migrations,

@@ -13,6 +13,12 @@ pre-commit:
 
 pre-push:
   commands:
+    gantry-format:
+      priority: 0
+      run: |
+        pm=npm; [ -f pnpm-lock.yaml ] && pm=pnpm
+        $pm run --if-present format:check
+
     gantry-typecheck:
       priority: 1
       run: |

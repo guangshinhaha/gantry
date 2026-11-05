@@ -119,6 +119,11 @@ jobs:
       - name: Lint
         run: ${{ steps.pm.outputs.pm }} run --if-present lint
 
+      # Skips when the repo has no `format:check` script. Catches unformatted
+      # files (e.g. from gantry-init) before they turn main red.
+      - name: Format check
+        run: ${{ steps.pm.outputs.pm }} run --if-present format:check
+
       - name: Typecheck
         run: |
           if [ -f tsconfig.json ]; then npx tsc --noEmit; else echo "no tsconfig.json, skipped"; fi
