@@ -43,6 +43,8 @@ levels, each harder to get around than the last:
   job, so the status still reports green instead of sitting on "pending".
 - **`gantry / ci-ok`**: one summary check. It fails if any job failed or was
   cancelled; skipped jobs count as passing. This is the check to require.
+- Optional: **second review by Claude** (see below). Runs once when a PR opens
+  or leaves draft, then only on request.
 
 **Optional extras** for some stacks
 - `prisma`: blocks raw-SQL escape hatches (`$queryRawUnsafe`, `Prisma.raw()`);
@@ -186,6 +188,34 @@ hit. When the PR no longer matches, the label and comment are removed.
   or commented on, so the check skips them.
 - It labels only; it doesn't block merging.
 
+## Second review (opt-in)
+
+Most code here is written by Claude and reviewed by one tired human. This adds
+a second reviewer: [claude-code-action](https://github.com/anthropics/claude-code-action)
+reads the PR diff and posts inline comments, ranked (correctness first, no
+style nits). It follows the repo's `CLAUDE.md` review rules if there are any.
+
+> **PDPA: this sends PR diffs to Anthropic.** Don't enable it on a repo whose
+> diffs could contain real student, staff or citizen data (fixtures, seeds,
+> screenshots). Decide per repo. That is why `gantry-init` does not add it
+> unless you pass `--review`.
+
+**Setup:** run `gantry-init --review` (or copy `template/.github/workflows/review.yml`),
+then add the `ANTHROPIC_API_KEY` repo secret yourself. Without the secret the
+job skips itself.
+
+**When it runs**
+- Once when a PR is opened or marked ready for review. Not on every push.
+- On demand: add the `review` label (it is removed afterwards, so you can add
+  it again) or comment `@claude review` (owners, members and collaborators only).
+- Never on drafts, bot PRs or fork PRs.
+
+**Cost:** about $0.10 to $0.50 per review on the default `claude-sonnet-5-5`
+($2 / $10 per million input / output tokens; estimate for a typical PR, not
+measured). `--max-turns` (default 12) caps the worst case. Both are inputs on
+the caller: `model:` (e.g. `claude-haiku-5-5` for cheaper) and `max-turns:`.
+Like the other checks, it reports only and never blocks a merge.
+
 ## Using it
 
 **New repo:** in Claude Code, run `/new-repo <git link>`. It clones the repo,
@@ -194,7 +224,7 @@ applies gantry, writes a starting CLAUDE.md, and asks before pushing.
 **Existing repo:**
 
 ```sh
-~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation]
+~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation] [--review]
 git add -A && git commit -m "Add gantry checks"
 ```
 
@@ -209,6 +239,7 @@ again. It adds:
 | `.github/workflows/preview.yml` | A few lines that call gantry's preview smoke tests. |
 | `.github/workflows/risky-paths.yml` | A few lines that call gantry's `needs-human` labelling. |
 | `.github/gantry-risky-paths` | Example list of risky globs. Edit to fit the repo. |
+| `.github/workflows/review.yml` | Second review by Claude. Only with `--review`. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
 | `CLAUDE.md` | A starting template: commands, gates, review rules. |
 
@@ -229,6 +260,7 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
                 platform-specific part is one "Find preview URL" step per platform.
                 Optional Lighthouse step runs after smoke.
   risky-paths.yml  shared needs-human labelling that repos call
+  review.yml    shared second review (claude-code-action) that repos call
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
 bin/gantry-protect requires gantry / ci-ok on the default branch (ruleset)

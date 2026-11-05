@@ -1,0 +1,110 @@
+# gantry second review. Call it from a repo with template/.github/workflows/review.yml
+# (see the README). Claude reviews the PR diff and posts inline comments.
+#
+# Runs on: PR opened / ready_for_review, the `review` label, or an
+# `@claude review` comment (owner/member/collaborator only). Not on every push.
+# Skips itself: drafts, bot PRs, forks (no secrets), and repos without the
+# ANTHROPIC_API_KEY secret.
+#
+# PDPA: this sends the PR diff to Anthropic. Do not enable on repos whose
+# diffs could contain real student/staff/citizen data.
+name: gantry-review
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: '"ubuntu-latest"'
+      model:
+        description: Claude model ID (check platform.claude.com/docs for current IDs)
+        type: string
+        default: claude-sonnet-5-5
+      max-turns:
+        description: Hard cap on agent turns, which bounds cost
+        type: number
+        default: 12
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 15
+    steps:
+      - name: Decide whether to review
+        id: gate
+        env:
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          EVENT: ${{ github.event_name }}
+          LABEL: ${{ github.event.label.name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          PR_FROM_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          IS_PR_COMMENT: ${{ github.event.issue.pull_request != null }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          ASSOC: ${{ github.event.comment.author_association }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          skip() { echo "run=false" >> "$GITHUB_OUTPUT"; echo "Skipping: $1"; exit 0; }
+          [ "$HAS_KEY" = "true" ] || skip "no ANTHROPIC_API_KEY secret"
+          case "$EVENT" in
+            pull_request|pull_request_target)
+              [ "$DRAFT" = "true" ] && skip "draft PR"
+              [ "$PR_AUTHOR_TYPE" = "Bot" ] && skip "bot PR"
+              [ "$PR_FROM_FORK" = "true" ] && skip "fork PR"
+              if [ "$LABEL" != "" ] && [ "$LABEL" != "review" ]; then skip "label is not 'review'"; fi
+              echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+              [ "$LABEL" = "review" ] && echo "relabel=true" >> "$GITHUB_OUTPUT"
+              ;;
+            issue_comment)
+              [ "$IS_PR_COMMENT" = "true" ] || skip "comment is not on a PR"
+              case "$ASSOC" in OWNER|MEMBER|COLLABORATOR) ;; *) skip "commenter lacks write access" ;; esac
+              printf '%s' "$COMMENT_BODY" | grep -qiE '(^|[[:space:]])@claude[[:space:]]+review([[:space:]]|$)' || skip "not an '@claude review' comment"
+              echo "number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+              ;;
+            *) skip "unsupported event $EVENT" ;;
+          esac
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          ref: refs/pull/${{ steps.gate.outputs.number }}/head
+          fetch-depth: 0
+
+      - name: Review
+        if: steps.gate.outputs.run == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ steps.gate.outputs.number }}
+
+            Review this pull request (use `gh pr diff` and `gh pr view`).
+            If the repo has a CLAUDE.md with review rules, follow them.
+            Report only real problems, ranked: correctness bugs and
+            regressions first, then security, then missing tests for risky
+            logic. No style nits, no praise, no restating the diff.
+            Post each finding as an inline comment on the line, with a
+            one-line fix suggestion. Then post one short summary comment
+            with `gh pr comment`. If nothing is wrong, say so in one line.
+          claude_args: >-
+            --max-turns ${{ inputs.max-turns }}
+            --model ${{ inputs.model }}
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+
+      - name: Remove the review label so it can be re-applied
+        if: always() && steps.gate.outputs.relabel == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr edit "${{ steps.gate.outputs.number }}" --repo "${{ github.repository }}" --remove-label review || true

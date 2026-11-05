@@ -2,17 +2,18 @@
 # Apply gantry to a repo: lefthook.yml, CI workflow, CLAUDE.md skeleton.
 # Never overwrites existing files. Safe to re-run.
 #
-#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation]
+#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation] [--review]
 set -e
 
 GANTRY_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="."
-PRISMA=0; NEXTJS=0; MUTATION=1
+PRISMA=0; NEXTJS=0; MUTATION=1; REVIEW=0
 for arg in "$@"; do
   case "$arg" in
     --prisma) PRISMA=1 ;;
     --nextjs) NEXTJS=1 ;;
     --no-mutation) MUTATION=0 ;;
+    --review) REVIEW=1 ;;
     *) TARGET="$arg" ;;
   esac
 done
@@ -52,6 +53,12 @@ if [ "$MUTATION" = 1 ] && [ -f package.json ]; then
         ;;
     esac
   fi
+fi
+
+# Second review by Claude: opt-in, because it sends PR diffs to Anthropic (PDPA).
+if [ "$REVIEW" = 1 ]; then
+  copy "$GANTRY_DIR/template/.github/workflows/review.yml" .github/workflows/review.yml
+  echo "  ! review needs the ANTHROPIC_API_KEY repo secret; set it yourself."
 fi
 
 # Uncomment opt-in configs.

@@ -1,0 +1,22 @@
+name: review
+# Second review by Claude: on PR open / ready for review, the `review` label,
+# or an `@claude review` comment. Needs the ANTHROPIC_API_KEY repo secret;
+# without it this skips itself. It sends the diff to Anthropic: don't enable on
+# repos whose diffs could contain real student/staff/citizen data.
+on:
+  pull_request:
+    types: [opened, ready_for_review, labeled]
+  issue_comment:
+    types: [created]
+concurrency:
+  group: review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  review:
+    uses: guangshinhaha/gantry/.github/workflows/review.yml@main
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
