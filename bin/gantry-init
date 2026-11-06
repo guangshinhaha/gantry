@@ -57,7 +57,8 @@ copy "$GANTRY_DIR/template/.github/workflows/ac-check.yml" .github/workflows/ac-
 copy "$GANTRY_DIR/template/.github/pull_request_template.md" .github/pull_request_template.md
 copy "$GANTRY_DIR/template/CLAUDE.md" CLAUDE.md
 
-# Docker build to GHCR: opt-in.
+# Docker build-and-verify (never pushes): opt-in. GovPaaS (Northflank), Railway
+# and Vercel build the image themselves; only AWS apps push to ECR.
 [ "$DOCKER" = 1 ] && copy "$GANTRY_DIR/template/.github/workflows/build.yml" .github/workflows/build.yml
 
 # Mutation testing: on by default for single-package Vitest/Jest repos.

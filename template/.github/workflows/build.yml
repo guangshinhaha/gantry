@@ -1,6 +1,7 @@
 name: build
-# Docker build to GHCR. PRs build only; main pushes sha-<short> and latest.
-# Added by `gantry-init --docker`. Skips itself without a Dockerfile.
+# Docker build-and-verify (GHA cache), never pushes. Northflank, Railway and
+# Vercel build the image themselves; only AWS apps push to ECR.
+# Added by `gantry-init --docker`. Skips itself, visibly, without a Dockerfile.
 on:
   pull_request:
     paths-ignore: ["docs/**", "**/*.md"]
@@ -14,4 +15,3 @@ jobs:
     uses: guangshinhaha/gantry/.github/workflows/build.yml@main
     permissions:
       contents: read
-      packages: write # used only by the push job, on main

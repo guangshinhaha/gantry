@@ -51,10 +51,12 @@ levels, each harder to get around than the last:
   cancelled; skipped jobs count as passing. This is the check to require.
 - Optional: **second review by Claude** (see below). Runs once when a PR opens
   or leaves draft, then only on request.
-- Optional (`--docker`): **Docker build**. PRs build the `Dockerfile` without
-  pushing, to catch breakage. Pushes to `main` publish
-  `ghcr.io/<owner>/<repo>` tagged `sha-<short>` and `latest`. Skips without a
-  Dockerfile.
+- Optional (`--docker`): **Docker build**. PRs and `main` build the
+  `Dockerfile` with the GHA cache to catch breakage. It never pushes: GovPaaS
+  (Northflank), Railway and Vercel build the image themselves, and only AWS
+  apps push to ECR. A registry push may come back later as an opt-in. Without
+  a Dockerfile it skips and says so (`Skipped: no Dockerfile`) in the job
+  summary.
 
 **Optional extras** for some stacks
 - `prisma`: blocks raw-SQL escape hatches (`$queryRawUnsafe`, `Prisma.raw()`);
@@ -261,7 +263,7 @@ again. It adds:
 | `.github/workflows/ac-check.yml` | A few lines that call gantry's acceptance-criteria check. |
 | `.github/pull_request_template.md` | PR template: `Closes #`, acceptance criteria, how I verified. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
-| `.github/workflows/build.yml` | Only with `--docker`: calls gantry's Docker build to GHCR. |
+| `.github/workflows/build.yml` | Only with `--docker`: calls gantry's build-and-verify Docker build (no push). |
 | `CLAUDE.md` | A starting template: commands, gates, review rules. |
 
 Repos that use husky are left alone, with instructions for switching.
@@ -283,7 +285,7 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
   risky-paths.yml  shared needs-human labelling that repos call
   review.yml    shared second review (claude-code-action) that repos call
   ac-check.yml  shared acceptance-criteria check that repos call
-  build.yml     shared Docker build to GHCR (opt-in via --docker)
+  build.yml     shared Docker build-and-verify, no push (opt-in via --docker)
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
 bin/gantry-protect requires gantry / ci-ok on the default branch (ruleset)
