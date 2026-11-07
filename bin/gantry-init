@@ -2,12 +2,12 @@
 # Apply gantry to a repo: lefthook.yml, CI workflow, CLAUDE.md skeleton.
 # Never overwrites existing files. Safe to re-run.
 #
-#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--preview [railway|vercel]]
+#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--ac-check] [--preview [railway|vercel]]
 set -e
 
 GANTRY_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="."
-PREVIEW=""; PREVIEW_FLAG=0; PRISMA=0; NEXTJS=0; MUTATION=1; REVIEW=0; DOCKER=0
+PREVIEW=""; PREVIEW_FLAG=0; PRISMA=0; NEXTJS=0; MUTATION=1; REVIEW=0; DOCKER=0; AC_CHECK=0
 WANT_PV=0
 for arg in "$@"; do
   if [ "$WANT_PV" = 1 ]; then
@@ -21,6 +21,7 @@ for arg in "$@"; do
     --no-mutation) MUTATION=0 ;;
     --review) REVIEW=1 ;;
     --docker) DOCKER=1 ;;
+    --ac-check) AC_CHECK=1 ;;
     *) TARGET="$arg" ;;
   esac
 done
@@ -53,8 +54,20 @@ else echo "  skip   preview smoke tests (no railway.json/vercel.json found; add 
 fi
 copy "$GANTRY_DIR/template/.github/workflows/risky-paths.yml" .github/workflows/risky-paths.yml
 copy "$GANTRY_DIR/template/gantry-risky-paths" .github/gantry-risky-paths
-copy "$GANTRY_DIR/template/.github/workflows/ac-check.yml" .github/workflows/ac-check.yml
-copy "$GANTRY_DIR/template/.github/pull_request_template.md" .github/pull_request_template.md
+
+# Acceptance-criteria check: opt-in, because it can only see that a box is
+# ticked, not that the claim is true. A repo that already has the workflow keeps
+# it and gets the template it needs.
+[ -e .github/workflows/ac-check.yml ] && AC_CHECK=1
+if [ "$AC_CHECK" = 1 ]; then
+  copy "$GANTRY_DIR/template/.github/workflows/ac-check.yml" .github/workflows/ac-check.yml
+  copy "$GANTRY_DIR/template/.github/pull_request_template.ac-check.md" .github/pull_request_template.md
+  grep -qiE '^#{1,6}[[:space:]]*acceptance criteria[[:space:]]*:?[[:space:]]*#*[[:space:]]*$' .github/pull_request_template.md ||
+    echo "  ! .github/pull_request_template.md has no Acceptance criteria section. ac-check fails a PR that closes an issue with a checklist unless the PR body repeats it."
+else
+  copy "$GANTRY_DIR/template/.github/pull_request_template.md" .github/pull_request_template.md
+fi
+
 copy "$GANTRY_DIR/template/CLAUDE.md" CLAUDE.md
 
 # Docker build-and-verify (never pushes): opt-in. GovPaaS (Northflank), Railway

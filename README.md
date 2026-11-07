@@ -53,11 +53,12 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   posted as a PR comment.
 - **`needs-human` label** when the PR touches a risky path (auth, migrations,
   payments, API keys, RLS). See below.
-- **Acceptance criteria:** if the PR says `Closes #N` and issue N has an
+- Optional (`--ac-check`): **Acceptance criteria.** If the PR says `Closes #N` and issue N has an
   `Acceptance criteria` checklist, the PR body must repeat it with every item
   ticked (and evidence). Unticked items fail the check, named; editing the
   body re-runs it. Fewer items than the issue only warns. Skips drafts and PRs
-  with no such issue.
+  with no such issue. Off by default: it can only see that a box is ticked, not
+  that the claim is true. A repo that already has the workflow keeps it.
 - Optional: Playwright end-to-end tests.
 - **Preview smoke tests** (Railway or Vercel): once the PR's preview is live on the PR's
   latest commit, Playwright `@smoke` tests run against it. Screenshots are
@@ -265,7 +266,7 @@ applies gantry, writes a starting CLAUDE.md, and asks before pushing.
 **Existing repo:**
 
 ```sh
-~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker]
+~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--ac-check]
 git add -A && git commit -m "Add gantry checks"
 ```
 
@@ -281,8 +282,8 @@ again. It adds:
 | `.github/workflows/risky-paths.yml` | A few lines that call gantry's `needs-human` labelling. |
 | `.github/gantry-risky-paths` | Example list of risky globs. Edit to fit the repo. |
 | `.github/workflows/review.yml` | Second review by Claude. Only with `--review`. |
-| `.github/workflows/ac-check.yml` | A few lines that call gantry's acceptance-criteria check. |
-| `.github/pull_request_template.md` | PR template: `Closes #`, acceptance criteria, how I verified. |
+| `.github/workflows/ac-check.yml` | Only with `--ac-check`: calls gantry's acceptance-criteria check. Kept if it already exists. |
+| `.github/pull_request_template.md` | PR template: `Closes #`, how I verified. With `--ac-check`, or if the repo already has `ac-check.yml`, it also has an acceptance criteria section. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
 | `.github/workflows/build.yml` | Only with `--docker`: calls gantry's build-and-verify Docker build (no push). |
 | `CLAUDE.md` | A starting template: commands, gates, review rules. |
@@ -305,7 +306,7 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
                 Optional Lighthouse step runs after smoke.
   risky-paths.yml  shared needs-human labelling that repos call
   review.yml    shared second review (claude-code-action) that repos call
-  ac-check.yml  shared acceptance-criteria check that repos call
+  ac-check.yml  shared acceptance-criteria check (opt-in via --ac-check)
   build.yml     shared Docker build-and-verify, no push (opt-in via --docker)
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
