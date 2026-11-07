@@ -277,7 +277,6 @@ const runsTool = {
   "cross-env CI=1 oxfmt .": "oxfmt",
   "NODE_ENV=ci oxfmt .": "oxfmt",
   "./node_modules/.bin/biome format .": "biome",
-  "tsc --noEmit && prettier --check .": "prettier",
 };
 for (const [command, tool] of Object.entries(runsTool)) {
   test(`script "${command}" runs ${tool}`, () =>
@@ -393,6 +392,14 @@ test("a format script that calls another script runs what that script runs", () 
     assert.ok(existsSync(join(dir, "prettier.args")));
   }));
 
+test('a quoted env value before the tool still reads as the tool', () =>
+  withRepo((dir) => {
+    put(dir, "package.json", pkg({ scripts: { format: 'FOO="a b" prettier --write .' } }));
+    installFormatter(dir, "prettier");
+    init(dir, "--no-mutation");
+    assert.ok(existsSync(join(dir, "prettier.args")));
+  }));
+
 test("a script named after its tool isn't read as a call to itself", () =>
   withRepo((dir) => {
     put(dir, "package.json", pkg({ scripts: { prettier: "prettier --check .", format: "npm run prettier" } }));
@@ -455,9 +462,9 @@ test("script named formats is a format script", () =>
     assert.equal(existsSync(join(dir, "prettier.args")), false);
   }));
 
-test("a format script that runs prettier on some paths and another tool isn't evidence", () =>
+for (const format of ["prettier --write src && dprint fmt", "prettier --write . && dprint fmt", "tsc --noEmit && prettier --check ."]) test(`"${format}" isn't clear evidence for prettier`, () =>
   withRepo((dir) => {
-    put(dir, "package.json", pkg({ scripts: { format: "prettier --write src && dprint fmt" } }));
+    put(dir, "package.json", pkg({ scripts: { format } }));
     installFormatter(dir, "prettier");
     assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
     assert.equal(existsSync(join(dir, "prettier.args")), false);
