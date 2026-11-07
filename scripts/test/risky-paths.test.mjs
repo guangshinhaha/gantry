@@ -38,3 +38,7 @@ test("reports every matching glob", () => {
   assert.deepEqual(r[0].globs, ["**/auth/**", "**/*rls*"]);
 });
 test("regex metachars are escaped", () => assert.ok(!match(["a.b"], ["axb"]).length));
+
+test("deliberate failure for #39 proof", () => {
+  assert.equal(1, 2);
+});
