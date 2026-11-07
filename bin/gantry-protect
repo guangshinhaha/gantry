@@ -1,21 +1,68 @@
 #!/bin/sh
-# Require the `gantry / ci-ok` check on a repo's default branch via a ruleset.
-# Repo admins can bypass. Idempotent: updates the ruleset named "gantry" if it exists.
+# Require status checks on a repo's default branch via a ruleset: `gantry / ci-ok`
+# by default, plus any --require. Repo admins can bypass. Idempotent: updates the
+# ruleset named "gantry" if it exists, replacing its list of checks, and prints
+# the final list.
 #
-#   gantry-protect [owner/repo] [--dry-run]
+#   gantry-protect [owner/repo] [--dry-run] [--require <check>]... [--no-ci-ok]
 #
 # --dry-run prints the JSON payload and changes nothing. Without owner/repo,
 # uses the repo of the current directory (needs `gh`).
+# --require adds a check, named exactly as GitHub reports it. A name that never
+# reports leaves every merge waiting. Repeatable.
+# --no-ci-ok leaves out `gantry / ci-ok`, for repos without gantry's CI. It needs
+# at least one --require.
 set -e
 
-REPO=""; DRY=0
-for arg in "$@"; do
-  case "$arg" in
+NL='
+'
+CI_OK_CHECK="gantry / ci-ok"
+
+REPO=""; DRY=0; CI_OK=1; REQUIRED=""
+while [ $# -gt 0 ]; do
+  case "$1" in
     --dry-run) DRY=1 ;;
-    -*) echo "unknown option: $arg" >&2; exit 2 ;;
-    *) REPO="$arg" ;;
+    --no-ci-ok) CI_OK=0 ;;
+    --require)
+      case "${2:-}" in
+        "" | -* | " "* | *" " | *[[:cntrl:]]*) echo "--require needs a check name" >&2; exit 2 ;;
+      esac
+      REQUIRED="$REQUIRED$2$NL"
+      shift
+      ;;
+    -*) echo "unknown option: $1" >&2; exit 2 ;;
+    *)
+      # A check name with spaces and no quotes lands here, so don't guess.
+      [ -z "$REPO" ] || { echo "unexpected argument: $1 (quote check names that have spaces)" >&2; exit 2; }
+      REPO="$1"
+      ;;
+  esac
+  shift
+done
+
+if [ "$CI_OK" = 1 ]; then
+  REQUIRED="$CI_OK_CHECK$NL$REQUIRED"
+else
+  [ -n "$REQUIRED" ] || { echo "--no-ci-ok needs at least one --require" >&2; exit 2; }
+  case "$NL$REQUIRED" in
+    *"$NL$CI_OK_CHECK$NL"*) echo "--no-ci-ok contradicts --require \"$CI_OK_CHECK\"" >&2; exit 2 ;;
+  esac
+fi
+
+# One JSON entry per check in CHECKS, one name per check in NAMES, no repeats.
+CHECKS=""; NAMES=""
+set -f; IFS=$NL
+for name in $REQUIRED; do
+  entry="{ \"context\": \"$(printf '%s' "$name" | sed 's/\\/\\\\/g; s/"/\\"/g')\" }"
+  case "$CHECKS" in
+    *"$entry"*) ;;
+    *)
+      CHECKS="$CHECKS${CHECKS:+, }$entry"
+      NAMES="$NAMES${NAMES:+, }$name"
+      ;;
   esac
 done
+set +f; unset IFS
 
 PAYLOAD='{
   "name": "gantry",
@@ -30,23 +77,24 @@ PAYLOAD='{
       "type": "required_status_checks",
       "parameters": {
         "strict_required_status_checks_policy": false,
-        "required_status_checks": [ { "context": "gantry / ci-ok" } ]
+        "required_status_checks": [ '"$CHECKS"' ]
       }
     }
   ]
 }'
 
 if [ "$DRY" = 1 ]; then
-  echo "$PAYLOAD"
+  printf '%s\n' "$PAYLOAD"
   exit 0
 fi
 
 [ -n "$REPO" ] || REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 id=$(gh api "repos/$REPO/rulesets" --jq '[.[] | select(.name == "gantry")][0].id // empty')
 if [ -n "$id" ]; then
-  echo "$PAYLOAD" | gh api -X PUT "repos/$REPO/rulesets/$id" --input - >/dev/null
+  printf '%s\n' "$PAYLOAD" | gh api -X PUT "repos/$REPO/rulesets/$id" --input - >/dev/null
   echo "updated ruleset gantry ($id) on $REPO"
 else
-  echo "$PAYLOAD" | gh api -X POST "repos/$REPO/rulesets" --input - >/dev/null
+  printf '%s\n' "$PAYLOAD" | gh api -X POST "repos/$REPO/rulesets" --input - >/dev/null
   echo "created ruleset gantry on $REPO"
 fi
+echo "required checks: $NAMES"
