@@ -89,6 +89,30 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
 Every check skips itself when a repo doesn't have the relevant script or
 config, so it is safe to turn everything on everywhere.
 
+## Repos that aren't plain Node
+
+`ci.yml` has a `node` job for lint, format check, typecheck, tests and audit.
+`gantry / ci-ok` stays green when the job skips, and the run's summary says why
+(`Node checks skipped: <reason>`). The secret scan still runs and still counts.
+
+- **No `package.json`** (a repo in any other language): the job skips with no
+  setting needed.
+- **A `package.json` in a repo with its own test workflow:** set `node: false`.
+  Use it when gantry's job can't run the repo's checks, such as shinfactory,
+  whose `test` script is `go test ./...` and needs the UI built first.
+
+```yaml
+jobs:
+  gantry:
+    uses: guangshinhaha/gantry/.github/workflows/ci.yml@main
+    with:
+      node: false
+```
+
+`gantry / ci-ok` doesn't cover the repo's own workflow, so a repo that sets
+`node: false` isn't protected by its tests until
+[#25](https://github.com/guangshinhaha/gantry/issues/25) is done.
+
 ## Blocking merges on red CI
 
 CI alone doesn't stop a merge. To make `gantry / ci-ok` required on a repo's
@@ -299,7 +323,8 @@ When one turns out to be useful everywhere, move it here.
 hooks/          lefthook configs: base (every repo), node, prisma, nextjs
 .github/workflows/
   ci.yml        shared CI that repos call: gate (merged-PR skip; docs-only runs
-                secrets only), secrets, node, then ci-ok (the one required check)
+                secrets only; no package.json or `node: false` skips node),
+                secrets, node, then ci-ok (the one required check)
   mutation.yml  shared mutation testing that repos call
   preview.yml   shared preview smoke tests. Platform-neutral; the only
                 platform-specific part is one "Find preview URL" step per platform.

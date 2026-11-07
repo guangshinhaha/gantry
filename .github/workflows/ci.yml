@@ -22,6 +22,10 @@ on:
         description: Run `test:e2e` (Playwright)
         type: boolean
         default: false
+      node:
+        description: Set to false to turn the node job off, for a repo whose own workflow runs its tests
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -31,9 +35,11 @@ jobs:
   # Decides which real jobs run. A push to main that is a merged PR skips them
   # all, because its CI already ran on the pull_request event. A change that only
   # touches docs skips everything except the secret scan, because a key can be
-  # pasted into a doc. Skipping happens here, not via workflow-level
-  # paths-ignore: a required check whose workflow never starts stays "pending"
-  # forever, but a skipped job still lets ci-ok report success.
+  # pasted into a doc. The node job also skips when the caller sets `node: false`
+  # or the repo has no package.json, and the reason goes in this job's summary.
+  # Skipping happens here, not via workflow-level paths-ignore: a required check
+  # whose workflow never starts stays "pending" forever, but a skipped job still
+  # lets ci-ok report success.
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -42,7 +48,7 @@ jobs:
       pull-requests: read
     outputs:
       merged_pr: ${{ steps.check.outputs.merged_pr }}
-      docs_only: ${{ steps.check.outputs.docs_only }}
+      run_node: ${{ steps.check.outputs.run_node }}
     steps:
       - id: check
         env:
@@ -52,6 +58,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
+          NODE_INPUT: ${{ inputs.node }}
         run: |
           merged_pr=false
           docs_only=false
@@ -73,8 +80,28 @@ jobs:
               docs_only=true; echo "Docs-only change, running only the secret scan."
             fi
           fi
+          run_node=false
+          if [ "$merged_pr" = false ] && [ "$docs_only" = false ]; then
+            skip_reason=""
+            if [ "$NODE_INPUT" != true ]; then
+              skip_reason="the caller set node: false"
+            elif ! err=$(gh api "repos/$REPO/contents/package.json?ref=$SHA" --silent 2>&1); then
+              # Only a missing file skips. Any other error, such as an API outage,
+              # fails this job so ci-ok can't go green without the checks.
+              case "$err" in
+                *"Not Found (HTTP 404)"*) skip_reason="no package.json in this repo" ;;
+                *) echo "::error::could not check for package.json: $err"; exit 1 ;;
+              esac
+            fi
+            if [ -z "$skip_reason" ]; then
+              run_node=true
+            else
+              echo "Node checks skipped: $skip_reason" >> "$GITHUB_STEP_SUMMARY"
+              echo "::notice::Node checks skipped: $skip_reason"
+            fi
+          fi
           echo "merged_pr=$merged_pr" >> "$GITHUB_OUTPUT"
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "run_node=$run_node" >> "$GITHUB_OUTPUT"
 
   secrets:
     needs: gate
@@ -94,9 +121,9 @@ jobs:
           gitleaks detect --redact --verbose
 
   node:
-    # Node/TS repos only: callers without package.json should not call this job.
+    # Node/TS repos only: gate skips this job for a repo with no package.json.
     needs: gate
-    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.merged_pr != 'true' && needs.gate.outputs.docs_only != 'true' }}
+    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.run_node == 'true' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     steps:
       - uses: actions/checkout@v4
