@@ -117,3 +117,4 @@ fi
 command -v lefthook >/dev/null || { echo "install lefthook first: brew install lefthook"; exit 1; }
 lefthook install
 echo "done. Commit the added files (lefthook.yml, .github/workflows/, stryker.config.mjs, package.json)."
+if then
