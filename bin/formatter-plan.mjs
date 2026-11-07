@@ -1,38 +1,48 @@
 #!/usr/bin/env node
-// Used by gantry-init. Prints the one formatter this repo uses: the one its scripts
-// run, or if they run none, the one it declares as a dependency. Prints "unknown"
-// when that isn't exactly one, or when a format script runs a tool we can't aim at
-// single files, and nothing when the repo has no formatter. A binary in
-// node_modules/.bin proves nothing: prettier is often there only because another
-// package pulled it in.
+// Used by gantry-init. Prints the one formatter to run on the files it added, or
+// "unknown" to warn instead, or nothing when the repo has no formatter. It runs a
+// formatter only on clear evidence. A wrong guess can turn format:check red, and a
+// warning can't. A binary in node_modules/.bin isn't evidence: prettier is often
+// there only because another package pulled it in.
 import { readFileSync } from "node:fs";
 
 const PACKAGES = { oxfmt: "oxfmt", biome: "@biomejs/biome", prettier: "prettier" };
-const LAUNCHERS = new Set(["npx", "bunx", "pnpm", "yarn", "npm", "exec", "dlx", "cross-env", "sh", "bash"]);
+const tools = Object.keys(PACKAGES);
+const LAUNCHERS = new Set(["npx", "bunx", "pnpm", "yarn", "npm", "exec", "dlx", "run", "cross-env"]);
+// Flags that don't change the output. Anything else, like --config or
+// --single-quote, is an option we'd drop when calling the tool ourselves.
+const HARMLESS_FLAGS = new Set(["--write", "-w", "--check", "--list-different", "-l", "--cache", "--ignore-unknown", "-u", "--", "--no-error-on-unmatched-pattern"]);
+
+const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+const scripts = pkg.scripts ?? {};
+const deps = { ...pkg.dependencies, ...pkg.devDependencies };
 
 // The commands a script runs: each one's first word after env vars and launchers,
 // so "eslint --plugin prettier ." runs eslint, and "npx prettier@3 ." runs prettier.
+// Quoted text is dropped: it's an argument, as in grep "eslint|prettier". A call to
+// another script counts as that script's commands.
 function commandsIn(script) {
-  return script.split(/&&|\|\||[;|&]/).map((part) => {
-    const words = part.trim().split(/\s+/).map((word) => word.replace(/^['"(]+|['")]+$/g, ""));
-    const word = words.find((w) => !LAUNCHERS.has(w) && !w.startsWith("-") && !/^\w+=/.test(w)) ?? "";
-    return word.split("/").pop().split("@")[0];
+  return script.replace(/"[^"]*"|'[^']*'/g, "").split(/&&|\|\||[;|&]/).flatMap((part) => {
+    const words = part.replace(/[()]/g, " ").trim().split(/\s+/);
+    const at = words.findIndex((word) => !LAUNCHERS.has(word) && !/^\w+=/.test(word));
+    const name = (words[at] ?? "").split("/").pop().split("@")[0];
+    if (!tools.includes(name) && Object.hasOwn(scripts, name)) return commandsIn(scripts[name]);
+    return [{ name, flags: words.slice(at + 1).filter((word) => word.startsWith("-")) }];
   });
 }
+const toolsIn = (commands) => tools.filter((tool) => commands.some((command) => command.name === tool));
 
-const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-const scripts = Object.entries(pkg.scripts ?? {});
-const tools = Object.keys(PACKAGES);
-const toolsIn = (entries) => {
-  const commands = entries.flatMap(([, script]) => commandsIn(script));
-  return tools.filter((tool) => commands.includes(tool));
-};
-const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+const isFormatScript = (name) => /(^|[^a-z])(format|fmt)([^a-z]|$)|(^|[a-z])(Format|Fmt)([^a-z]|$)/.test(name);
+const all = Object.values(scripts).flatMap(commandsIn).filter((command) => tools.includes(command.name));
+const formatScripts = Object.keys(scripts).filter(isFormatScript);
+const otherToolFormats = formatScripts.some((name) => toolsIn(commandsIn(scripts[name])).length === 0);
+const passesOptions = all.some((command) => command.flags.some((flag) => !HARMLESS_FLAGS.has(flag)));
+const declared = tools.filter((tool) => PACKAGES[tool] in deps);
+// A format script is evidence that outranks a declared dependency. No format script
+// isn't: the formatter may run from CI or an editor, and only some scripts show it.
+const found = formatScripts.length
+  ? toolsIn(all)
+  : tools.filter((tool) => toolsIn(all).includes(tool) || declared.includes(tool));
 
-const formatScripts = scripts.filter(([name]) => /(^|[:_-])(format|fmt)($|[:_-])/i.test(name));
-const scripted = toolsIn(scripts);
-const found = scripted.length ? scripted : tools.filter((tool) => PACKAGES[tool] in deps);
-const unaimable = formatScripts.length > 0 && toolsIn(formatScripts).length === 0;
-
-if (unaimable || found.length > 1) console.log("unknown");
+if (otherToolFormats || passesOptions || found.length > 1) console.log("unknown");
 else if (found.length === 1) console.log(found[0]);
