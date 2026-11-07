@@ -1,6 +1,6 @@
 #!/bin/sh
 # Apply gantry to a repo: lefthook.yml, CI workflow, CLAUDE.md skeleton.
-# Never overwrites existing files. Safe to re-run.
+# Never overwrites existing files. Safe to re-run. Formats only the files it adds.
 #
 #   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--ac-check] [--preview [railway|vercel]]
 set -e
@@ -28,10 +28,37 @@ done
 cd "$TARGET"
 git rev-parse --git-dir >/dev/null 2>&1 || { echo "not a git repo: $(pwd)"; exit 1; }
 
+ADDED="" # every path is a fixed name with no spaces, so this splits safely
 copy() { # src dest
   if [ -e "$2" ]; then echo "  keep   $2 (exists)"
-  else mkdir -p "$(dirname "$2")"; cp "$1" "$2"; echo "  add    $2"; fi
+  else mkdir -p "$(dirname "$2")"; cp "$1" "$2"; echo "  add    $2"; ADDED="$ADDED $2"; fi
 }
+
+# Format what we added, or a repo's format:check goes red on the next PR (#13).
+# Runs the repo's local binary, because its format script would format everything.
+format_added() {
+  [ -n "$ADDED" ] || return 0
+  files="$ADDED"; ADDED=""
+  tool=""
+  if [ -f package.json ]; then tool=$(node "$GANTRY_DIR/bin/formatter-plan.mjs" 2>/dev/null) || tool=unknown; fi
+  case "$tool" in
+    "") echo "  skip   format (no oxfmt, biome or prettier in package.json). If you use another formatter, run it before committing."; return 0 ;;
+    oxfmt) flags="--no-error-on-unmatched-pattern" ;;
+    biome) flags="format --write --no-errors-on-unmatched --files-ignore-unknown=true" ;;
+    prettier) flags="--write --ignore-unknown --no-error-on-unmatched-pattern" ;;
+    *) echo "  ! Can't tell which single formatter to run on the added files. Run your formatter before committing."; return 0 ;;
+  esac
+  if [ ! -x "node_modules/.bin/$tool" ]; then
+    echo "  ! $tool is not installed, so the added files are unformatted. Install dependencies and run your formatter before committing."
+  elif out=$("node_modules/.bin/$tool" $flags $files 2>&1); then
+    echo "  format added files with $tool"
+  else
+    echo "  ! $tool failed on the added files. Run your formatter before committing."
+    echo "$out"
+  fi
+}
+# A later step can abort (set -e), and a re-run would see these files as kept.
+trap format_added EXIT
 
 echo "gantry → $(pwd)"
 copy "$GANTRY_DIR/template/lefthook.yml" lefthook.yml
@@ -48,6 +75,7 @@ if [ -n "$PREVIEW" ]; then
     mkdir -p .github/workflows
     sed "s|__PLATFORM__|$PREVIEW|" "$GANTRY_DIR/template/.github/workflows/preview.yml" > .github/workflows/preview.yml
     echo "  add    .github/workflows/preview.yml (platform: $PREVIEW)"
+    ADDED="$ADDED .github/workflows/preview.yml"
   fi
 elif [ -e .github/workflows/preview.yml ]; then echo "  keep   .github/workflows/preview.yml (exists)"
 else echo "  skip   preview smoke tests (no railway.json/vercel.json found; add with: gantry-init --preview railway|vercel)"
@@ -86,6 +114,7 @@ if [ "$MUTATION" = 1 ] && [ -f package.json ]; then
       *)
         copy "$GANTRY_DIR/template/.github/workflows/mutation.yml" .github/workflows/mutation.yml
         echo "  add    stryker.config.mjs"
+        ADDED="$ADDED stryker.config.mjs"
         echo "  install $plan"
         if [ -f pnpm-lock.yaml ]; then pnpm add -D $plan >/dev/null; else npm install -D $plan >/dev/null; fi
         for l in ".stryker-tmp/" "reports/mutation/" "reports/stryker-incremental.json"; do
@@ -105,6 +134,8 @@ fi
 # Uncomment opt-in configs.
 [ "$PRISMA" = 1 ] && sed -i '' 's|# - hooks/prisma.yml|- hooks/prisma.yml|' lefthook.yml
 [ "$NEXTJS" = 1 ] && sed -i '' 's|# - hooks/nextjs.yml|- hooks/nextjs.yml|' lefthook.yml
+
+format_added
 
 if [ -d .husky ] || [ -n "$(git config --local core.hooksPath)" ]; then
   echo
