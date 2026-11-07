@@ -366,6 +366,8 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
   review.yml    shared second review (claude-code-action) that repos call
   ac-check.yml  shared acceptance-criteria check (opt-in via --ac-check)
   build.yml     shared Docker build-and-verify, no push (opt-in via --docker)
+  own-ci.yml    gantry's own PR check (actionlint, script syntax, node --test); repos don't
+                call it
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
 bin/gantry-protect requires gantry / ci-ok, plus any --require, on the default branch (ruleset)
