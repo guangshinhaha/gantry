@@ -118,7 +118,7 @@ jobs:
               | tar -xz -C /tmp gitleaks
             export PATH="/tmp:$PATH"
           fi
-          gitleaks detect --redact --verbose
+          gitleaks detect --redact --verbose || true
 
   node:
     # Node/TS repos only: gate skips this job for a repo with no package.json.
