@@ -20,12 +20,14 @@ const deps = { ...pkg.dependencies, ...pkg.devDependencies };
 
 // The commands a script runs: each one's first word after env vars and launchers,
 // so "eslint --plugin prettier ." runs eslint, and "npx prettier@3 ." runs prettier.
-// Quoted text is dropped: it's an argument, as in grep "eslint|prettier". A call to
+// Quoted text is an argument, as in grep "eslint|prettier", so it becomes a QUOTED
+// word. A tool given one may cover only some files (prettier --write "**/*.md"). A call to
 // another script counts as that script's commands, with any flags it forwards
 // ("npm run fmt -- --config x"), unless it's already being expanded: "vitest":
 // "vitest" runs vitest, not itself.
+const QUOTED = "\u0000";
 function commandsIn(script, expanding = new Set()) {
-  return script.replace(/"[^"]*"|'[^']*'/g, "").split(/&&|\|\||[;|&]/).flatMap((part) => {
+  return script.replace(/"[^"]*"|'[^']*'/g, ` ${QUOTED} `).split(/&&|\|\||[;|&]/).flatMap((part) => {
     const words = part.replace(/[()]/g, " ").trim().split(/\s+/);
     const at = words.findIndex((word) => !LAUNCHERS.has(word) && !/^\w+=/.test(word));
     const name = (words[at] ?? "").split("/").pop().split("@")[0];
@@ -34,18 +36,25 @@ function commandsIn(script, expanding = new Set()) {
       return commandsIn(scripts[name], new Set(expanding).add(name))
         .map((command) => ({ ...command, flags: [...command.flags, ...flags] }));
     }
-    return [{ name, flags }];
+    return [{ name, flags, quoted: words.slice(at + 1).includes(QUOTED) }];
   });
 }
 const toolsIn = (commands) => tools.filter((tool) => commands.some((command) => command.name === tool));
 
-// format, fmt, reformat, formatting, formatter and their camelCase forms, but not
+// format, fmt, reformat, formats, formatting, formatter and their camelCase forms, but not
 // formatjs or information.
 const isFormatScript = (name) =>
-  /(^|[^a-z])(re)?(format|fmt)(ting|ter)?([^a-z]|$)|(^|[a-z])(Format|Fmt)(ting|ter)?([^a-z]|$)/.test(name);
+  /(^|[^a-z])(re)?(format|fmt)(ting|ter|s)?([^a-z]|$)|(^|[a-z])(Format|Fmt)(ting|ter|s)?([^a-z]|$)/.test(name);
 const all = Object.entries(scripts).flatMap(([name, script]) => commandsIn(script, new Set([name]))).filter((command) => tools.includes(command.name));
 const formatScripts = Object.keys(scripts).filter(isFormatScript);
-const otherToolFormats = formatScripts.some((name) => toolsIn(commandsIn(scripts[name], new Set([name]))).length === 0);
+// A format script with no supported tool runs another formatter. One that runs a
+// tool on quoted paths next to another command may leave the rest to that command
+// ("dprint fmt && prettier --write \"**/*.md\""). Neither is clear evidence.
+const otherToolFormats = formatScripts.some((name) => {
+  const commands = commandsIn(scripts[name], new Set([name])).filter((command) => command.name);
+  const theirs = commands.filter((command) => tools.includes(command.name));
+  return theirs.length === 0 || (theirs.some((command) => command.quoted) && commands.length > theirs.length);
+});
 const passesOptions = all.some((command) => command.flags.some((flag) => !HARMLESS_FLAGS.has(flag)));
 const declared = tools.filter((tool) => PACKAGES[tool] in deps);
 // A format script is evidence that outranks a declared dependency. No format script

@@ -438,3 +438,19 @@ test("a script entry that isn't a string is ignored", () =>
     init(dir, "--no-mutation");
     assert.ok(existsSync(join(dir, "prettier.args")));
   }));
+
+test("a format script that runs another tool too isn't evidence for prettier", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", pkg({ scripts: { format: 'dprint fmt && prettier --write "**/*.md"' } }));
+    installFormatter(dir, "prettier");
+    assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
+    assert.equal(existsSync(join(dir, "prettier.args")), false);
+  }));
+
+test("script named formats is a format script", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", pkg({ scripts: { formats: "dprint fmt" }, devDependencies: { prettier: "3.0.0" } }));
+    installFormatter(dir, "prettier");
+    assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
+    assert.equal(existsSync(join(dir, "prettier.args")), false);
+  }));
