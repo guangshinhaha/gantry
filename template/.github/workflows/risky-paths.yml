@@ -7,7 +7,7 @@ on:
 concurrency:
   group: risky-paths-${{ github.event.pull_request.number }}
   cancel-in-progress: true
-jobs:
+jobz:
   risky-paths:
     uses: guangshinhaha/gantry/.github/workflows/risky-paths.yml@main
     permissions:
