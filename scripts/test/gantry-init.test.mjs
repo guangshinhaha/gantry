@@ -410,3 +410,31 @@ test("scripts that call themselves or each other don't hide the formatter", () =
     init(dir, "--no-mutation");
     assert.ok(existsSync(join(dir, "prettier.args")));
   }));
+
+test("flags forwarded to another script count as options passed", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", pkg({
+      scripts: { fmt: "prettier --write .", "format:ci": "npm run fmt -- --config x.json" },
+    }));
+    installFormatter(dir, "prettier");
+    assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
+    assert.equal(existsSync(join(dir, "prettier.args")), false);
+  }));
+
+for (const name of ["check:formatting", "reformat", "checkFormatting", "formatter"]) {
+  test(`script named ${name} is a format script`, () =>
+    withRepo((dir) => {
+      put(dir, "package.json", pkg({ scripts: { [name]: "dprint check" }, devDependencies: { prettier: "3.0.0" } }));
+      installFormatter(dir, "prettier");
+      assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
+      assert.equal(existsSync(join(dir, "prettier.args")), false);
+    }));
+}
+
+test("a script entry that isn't a string is ignored", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", pkg({ scripts: { format: "prettier --write .", x: null, y: 3 } }));
+    installFormatter(dir, "prettier");
+    init(dir, "--no-mutation");
+    assert.ok(existsSync(join(dir, "prettier.args")));
+  }));

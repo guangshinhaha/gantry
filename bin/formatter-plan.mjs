@@ -14,28 +14,35 @@ const LAUNCHERS = new Set(["npx", "bunx", "pnpm", "yarn", "npm", "exec", "dlx", 
 const HARMLESS_FLAGS = new Set(["--write", "-w", "--check", "--list-different", "-l", "--cache", "--ignore-unknown", "-u", "--", "--no-error-on-unmatched-pattern"]);
 
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-const scripts = pkg.scripts ?? {};
+// Some tools leave non-string entries in scripts; they run nothing.
+const scripts = Object.fromEntries(Object.entries(pkg.scripts ?? {}).filter(([, script]) => typeof script === "string"));
 const deps = { ...pkg.dependencies, ...pkg.devDependencies };
 
 // The commands a script runs: each one's first word after env vars and launchers,
 // so "eslint --plugin prettier ." runs eslint, and "npx prettier@3 ." runs prettier.
 // Quoted text is dropped: it's an argument, as in grep "eslint|prettier". A call to
-// another script counts as that script's commands, unless it's already being
-// expanded: "vitest": "vitest" runs vitest, not itself.
+// another script counts as that script's commands, with any flags it forwards
+// ("npm run fmt -- --config x"), unless it's already being expanded: "vitest":
+// "vitest" runs vitest, not itself.
 function commandsIn(script, expanding = new Set()) {
   return script.replace(/"[^"]*"|'[^']*'/g, "").split(/&&|\|\||[;|&]/).flatMap((part) => {
     const words = part.replace(/[()]/g, " ").trim().split(/\s+/);
     const at = words.findIndex((word) => !LAUNCHERS.has(word) && !/^\w+=/.test(word));
     const name = (words[at] ?? "").split("/").pop().split("@")[0];
+    const flags = words.slice(at + 1).filter((word) => word.startsWith("-"));
     if (!tools.includes(name) && Object.hasOwn(scripts, name) && !expanding.has(name)) {
-      return commandsIn(scripts[name], new Set(expanding).add(name));
+      return commandsIn(scripts[name], new Set(expanding).add(name))
+        .map((command) => ({ ...command, flags: [...command.flags, ...flags] }));
     }
-    return [{ name, flags: words.slice(at + 1).filter((word) => word.startsWith("-")) }];
+    return [{ name, flags }];
   });
 }
 const toolsIn = (commands) => tools.filter((tool) => commands.some((command) => command.name === tool));
 
-const isFormatScript = (name) => /(^|[^a-z])(format|fmt)([^a-z]|$)|(^|[a-z])(Format|Fmt)([^a-z]|$)/.test(name);
+// format, fmt, reformat, formatting, formatter and their camelCase forms, but not
+// formatjs or information.
+const isFormatScript = (name) =>
+  /(^|[^a-z])(re)?(format|fmt)(ting|ter)?([^a-z]|$)|(^|[a-z])(Format|Fmt)(ting|ter)?([^a-z]|$)/.test(name);
 const all = Object.entries(scripts).flatMap(([name, script]) => commandsIn(script, new Set([name]))).filter((command) => tools.includes(command.name));
 const formatScripts = Object.keys(scripts).filter(isFormatScript);
 const otherToolFormats = formatScripts.some((name) => toolsIn(commandsIn(scripts[name], new Set([name]))).length === 0);
