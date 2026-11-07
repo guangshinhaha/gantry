@@ -328,7 +328,8 @@ git add -A && git commit -m "Add gantry checks"
 ```
 
 `gantry-init` never overwrites a file that already exists, and is safe to run
-again. It adds:
+again. If the repo uses oxfmt, biome or prettier, it formats the files it adds,
+and no others, with the repo's local binary. It adds:
 
 | File | What it is |
 |---|---|
