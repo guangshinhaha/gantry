@@ -470,3 +470,11 @@ test("a pre or post hook of a format script counts as a format script", () =>
     assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
     assert.equal(existsSync(join(dir, "prettier.args")), false);
   }));
+
+test("biome lint isn't evidence that biome formats", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", pkg({ scripts: { lint: "biome lint ." } }));
+    installFormatter(dir, "biome");
+    init(dir, "--no-mutation");
+    assert.equal(existsSync(join(dir, "biome.args")), false);
+  }));

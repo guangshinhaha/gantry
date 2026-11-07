@@ -37,6 +37,8 @@ function commandsIn(script, expanding = new Set()) {
         .map((command) => ({ ...command, flags: [...command.flags, ...flags] }));
     }
     const paths = words.slice(at + 1).filter((word) => word && !word.startsWith("-"));
+    // biome lint never formats, so it says nothing about the formatter.
+    if (name === "biome" && paths[0] === "lint") return [{ name: "biome lint", flags, partial: false }];
     return [{ name, flags, partial: paths.some((path) => path !== "." && path !== "./") }];
   });
 }
