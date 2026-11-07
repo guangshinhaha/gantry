@@ -14,6 +14,28 @@ levels, each harder to get around than the last:
 | **Local hooks** | your machine, on commit and push | Only with `--no-verify`, which is banned |
 | **CI** | GitHub, on every PR | No |
 
+## How gantry, shinstack and shinfactory fit together
+
+Each of the three works alone, with neither of the others installed. When they are in the same repo, they work together without overlapping.
+
+| Tool | Answers | Owns | How it acts |
+|---|---|---|---|
+| [gantry](https://github.com/guangshinhaha/gantry) | Did it pass? | Local hooks, CI checks, the secret scan and the required `gantry / ci-ok` check | Runs checks with no judgment, and can block a merge |
+| [shinstack](https://github.com/guangshinhaha/shinstack) | How should the agent work, and may it act? | Principles, playbooks, review depth, PR format and approval modes | Advises the agent |
+| [shinfactory](https://github.com/guangshinhaha/shinfactory) | What runs next, and who runs it? | Stage order, retries, provider and model, and merges inside a factory order | Runs the loop |
+
+To place a new rule, ask these in order and stop at the first yes:
+
+1. Can a machine check it with no judgment? It goes in gantry. A check that only one repo needs goes in that repo's own workflow.
+2. Does it need a schedule, a stage or an event? It goes in shinfactory.
+3. Would it still apply to one person running one agent session with no loop? It goes in shinstack.
+
+A merge needs both a green check and an approval. Gantry decides whether the checks pass. shinstack's `approval-modes` or shinfactory's `mode` decides whether the merge may happen.
+
+Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack/blob/main/docs/decisions/shinstack-vs-shinfactory.md).
+
+Today, `template/CLAUDE.md` still assumes shinstack is installed. See [#29](https://github.com/guangshinhaha/gantry/issues/29).
+
 ## What runs when
 
 **On every commit** (fast, staged files only)
