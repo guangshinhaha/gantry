@@ -400,3 +400,13 @@ test("a script named after its tool isn't read as a call to itself", () =>
     init(dir, "--no-mutation");
     assert.ok(existsSync(join(dir, "prettier.args")));
   }));
+
+test("scripts that call themselves or each other don't hide the formatter", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", pkg({
+      scripts: { format: "prettier --write .", vitest: "vitest", ping: "npm run pong", pong: "npm run ping" },
+    }));
+    installFormatter(dir, "prettier");
+    init(dir, "--no-mutation");
+    assert.ok(existsSync(join(dir, "prettier.args")));
+  }));

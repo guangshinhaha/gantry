@@ -20,22 +20,25 @@ const deps = { ...pkg.dependencies, ...pkg.devDependencies };
 // The commands a script runs: each one's first word after env vars and launchers,
 // so "eslint --plugin prettier ." runs eslint, and "npx prettier@3 ." runs prettier.
 // Quoted text is dropped: it's an argument, as in grep "eslint|prettier". A call to
-// another script counts as that script's commands.
-function commandsIn(script) {
+// another script counts as that script's commands, unless it's already being
+// expanded: "vitest": "vitest" runs vitest, not itself.
+function commandsIn(script, expanding = new Set()) {
   return script.replace(/"[^"]*"|'[^']*'/g, "").split(/&&|\|\||[;|&]/).flatMap((part) => {
     const words = part.replace(/[()]/g, " ").trim().split(/\s+/);
     const at = words.findIndex((word) => !LAUNCHERS.has(word) && !/^\w+=/.test(word));
     const name = (words[at] ?? "").split("/").pop().split("@")[0];
-    if (!tools.includes(name) && Object.hasOwn(scripts, name)) return commandsIn(scripts[name]);
+    if (!tools.includes(name) && Object.hasOwn(scripts, name) && !expanding.has(name)) {
+      return commandsIn(scripts[name], new Set(expanding).add(name));
+    }
     return [{ name, flags: words.slice(at + 1).filter((word) => word.startsWith("-")) }];
   });
 }
 const toolsIn = (commands) => tools.filter((tool) => commands.some((command) => command.name === tool));
 
 const isFormatScript = (name) => /(^|[^a-z])(format|fmt)([^a-z]|$)|(^|[a-z])(Format|Fmt)([^a-z]|$)/.test(name);
-const all = Object.values(scripts).flatMap(commandsIn).filter((command) => tools.includes(command.name));
+const all = Object.entries(scripts).flatMap(([name, script]) => commandsIn(script, new Set([name]))).filter((command) => tools.includes(command.name));
 const formatScripts = Object.keys(scripts).filter(isFormatScript);
-const otherToolFormats = formatScripts.some((name) => toolsIn(commandsIn(scripts[name])).length === 0);
+const otherToolFormats = formatScripts.some((name) => toolsIn(commandsIn(scripts[name], new Set([name]))).length === 0);
 const passesOptions = all.some((command) => command.flags.some((flag) => !HARMLESS_FLAGS.has(flag)));
 const declared = tools.filter((tool) => PACKAGES[tool] in deps);
 // A format script is evidence that outranks a declared dependency. No format script
