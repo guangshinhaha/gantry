@@ -454,3 +454,11 @@ test("script named formats is a format script", () =>
     assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
     assert.equal(existsSync(join(dir, "prettier.args")), false);
   }));
+
+test("a format script that runs prettier on some paths and another tool isn't evidence", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", pkg({ scripts: { format: "prettier --write src && dprint fmt" } }));
+    installFormatter(dir, "prettier");
+    assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
+    assert.equal(existsSync(join(dir, "prettier.args")), false);
+  }));
