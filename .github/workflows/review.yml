@@ -1,3 +1,4 @@
+# adversarial probe comment
 # gantry second review. Call it from a repo with template/.github/workflows/review.yml
 # (see the README). Claude reviews the PR diff and posts inline comments.
 #
