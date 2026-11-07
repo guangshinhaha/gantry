@@ -20,3 +20,4 @@ jobs:
     # with:
     #   runs-on: '["self-hosted","gantry"]'   # once your runner is up
     #   e2e: true
+    #   node: false   # if this repo's own workflow runs its tests
