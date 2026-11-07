@@ -1,0 +1,10 @@
+name: decoy
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  own-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - run: sleep 90 && echo green
