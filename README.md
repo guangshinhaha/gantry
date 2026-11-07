@@ -368,6 +368,8 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
   build.yml     shared Docker build-and-verify, no push (opt-in via --docker)
   own-ci.yml    gantry's own PR check (actionlint, script syntax, node --test); repos don't
                 call it
+  selftest.yml  on gantry PRs that change ci.yml, runs that ci.yml on sample PRs in
+                gantry-sandbox and fails if a check stopped firing; repos don't call it
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
 bin/gantry-protect requires gantry / ci-ok, plus any --require, on the default branch (ruleset)
@@ -377,10 +379,19 @@ scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 lighthouse-report.mjs: turns Lighthouse results into the PR comment section
                 risky-paths.mjs: glob matching for needs-human (tests in scripts/test/)
                 ac-check.mjs: parses PR/issue checklists (tests: ac-check.test.mjs)
+                selftest.mjs: the sandbox self-test that selftest.yml runs
 ```
 
 Repos follow `main`, so a change here reaches every repo at once: the hooks on
 their next daily re-fetch, CI on their next run. Test changes on one repo first.
+
+A PR that changes `ci.yml` gets the `gantry-selftest` check. It opens four draft
+PRs in gantry-sandbox against that PR's `ci.yml`: a normal change (must go green),
+a failing test and a planted made-up key (both must turn `gantry / ci-ok` red),
+and a docs-only change (must run the secret scan and skip node). It closes them
+and deletes their branches when done. To run it from your machine, signed in to
+`gh`: `node scripts/selftest.mjs --gantry-sha <pushed sha>`. Don't run two at
+once: a planted key turns the other run's scans red (#36).
 
 To run CI on your own machine instead of GitHub's, pass
 `runs-on: '["self-hosted","gantry"]'` in a repo's `ci.yml`.

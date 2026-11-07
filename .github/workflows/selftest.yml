@@ -1,0 +1,84 @@
+# Self-test for gantry PRs that change ci.yml. It runs the PR's ci.yml on draft
+# PRs in gantry-sandbox and fails unless each check still fires: a planted
+# made-up key and a failing test turn `gantry / ci-ok` red, a normal change
+# stays green, and a docs-only change runs the secret scan but skips node.
+# See scripts/selftest.mjs. Like own-ci.yml, this file stays in gantry.
+#
+# Needs the GANTRY_SANDBOX_TOKEN secret: a fine-grained token for gantry-sandbox
+# only, with Contents, Pull requests and Workflows read/write and Actions read.
+# Without it (and on fork PRs, which get no secrets) the job warns and passes.
+name: gantry-selftest
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ci.yml
+      - .github/workflows/selftest.yml
+      - scripts/selftest.mjs
+  workflow_dispatch:
+
+# One self-test at a time: they share the sandbox, and a planted key there can
+# turn another run red (gantry#36). A newer run waits instead of cancelling, so
+# cleanup always finishes.
+concurrency:
+  group: gantry-selftest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ secrets.GANTRY_SANDBOX_TOKEN }}
+      SANDBOX: guangshinhaha/gantry-sandbox
+    steps:
+      - id: token
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            msg="Self-test not run: the GANTRY_SANDBOX_TOKEN secret isn't set, or this PR is from a fork."
+            echo "::warning::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.token.outputs.ok == 'true'
+        uses: actions/checkout@v4
+
+      - if: steps.token.outputs.ok == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Leftovers from a cancelled run would hold a planted key.
+      - name: Remove leftover selftest branches
+        if: steps.token.outputs.ok == 'true'
+        run: node scripts/selftest.mjs --cleanup --sandbox "$SANDBOX"
+
+      # A key already on some sandbox branch turns every scan red (gantry#36),
+      # which would look like a gantry regression. Fail early and say so instead.
+      - name: Check the sandbox holds no key
+        if: steps.token.outputs.ok == 'true'
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP" gitleaks
+          git clone -q "https://github.com/$SANDBOX" "$RUNNER_TEMP/sandbox"
+          cd "$RUNNER_TEMP/sandbox"
+          if ! "$RUNNER_TEMP/gitleaks" detect --redact --verbose; then
+            echo "::error::A branch in $SANDBOX already holds a key. Remove it, then re-run. This is not a gantry failure."
+            exit 1
+          fi
+
+      - name: Self-test
+        if: steps.token.outputs.ok == 'true'
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/selftest.mjs --gantry-sha "$SHA" --sandbox "$SANDBOX"
+
+      - name: Clean up
+        if: always() && steps.token.outputs.ok == 'true'
+        run: node scripts/selftest.mjs --cleanup --sandbox "$SANDBOX"
