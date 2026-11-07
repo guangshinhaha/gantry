@@ -113,8 +113,8 @@ jobs:
 ```
 
 `gantry / ci-ok` doesn't cover the repo's own workflow, so a repo that sets
-`node: false` isn't protected by its tests until
-[#25](https://github.com/guangshinhaha/gantry/issues/25) is done.
+`node: false` also needs that workflow's job required with `gantry-protect
+--require` (see [Blocking merges on red CI](#blocking-merges-on-red-ci)).
 
 ## Blocking merges on red CI
 
@@ -122,12 +122,42 @@ CI alone doesn't stop a merge. To make `gantry / ci-ok` required on a repo's
 default branch (repo admins can bypass), run once per repo:
 
 ```sh
-~/Desktop/projects/gantry/bin/gantry-protect owner/repo [--dry-run]
+~/Desktop/projects/gantry/bin/gantry-protect owner/repo [--dry-run] [--require <check>]... [--no-ci-ok]
 ```
 
 It creates a ruleset named `gantry`, or updates it if it exists.
 `--dry-run` prints the JSON payload and changes nothing. It needs `gh` signed
 in as a repo admin.
+
+- **`--require <check>`** adds a required check. Repeat it for more checks.
+  `gantry / ci-ok` stays required.
+- **`--no-ci-ok`** leaves out `gantry / ci-ok`, for a repo without gantry's CI,
+  where that check would never report. It needs at least one `--require`.
+- **Each run replaces the list.** Pass every check you want each time. A real
+  run prints the final list.
+
+`gantry / ci-ok` covers only the jobs in gantry's `ci.yml`. The other workflows
+report their own checks:
+
+| Workflow | Check | Require it? |
+|---|---|---|
+| `ci.yml` | `gantry / ci-ok` | Yes, by default. |
+| `risky-paths.yml` | `risky-paths / risky-paths` | Optional, with `--require`. It fails only if the job breaks, because a matching path adds a label and doesn't fail the check. |
+| `ac-check.yml` | `ac-check / ac-check` | With `--require`, on repos that opted in with `--ac-check`. |
+| `build.yml` | `build / build` | No. It doesn't run on docs-only PRs, so they would wait forever. |
+| `review.yml` | `review / review` | No. It runs only on some PR events. |
+| `mutation.yml` | `mutation / mutation` | No. It doesn't run on docs-only PRs, so they would wait forever. |
+| `preview.yml` | `preview / preview` | No. It doesn't run on docs-only PRs, so they would wait forever. |
+
+A check name must match what GitHub reports. A name that never reports leaves
+every merge waiting, so look it up from a recent run before applying:
+
+```sh
+gh api repos/owner/repo/commits/<sha>/check-runs --jq '.check_runs[].name'
+```
+
+A ruleset that requires a check also blocks direct pushes to the default branch.
+Repo admins keep their bypass, so they can still push and merge.
 
 - **Plan:** rulesets and protected branches on *private* repos need a paid
   GitHub plan (Pro, Team or Enterprise). Free covers public repos only. GitHub's
@@ -338,7 +368,7 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
   build.yml     shared Docker build-and-verify, no push (opt-in via --docker)
 template/       files gantry-init copies into a repo
 bin/gantry-init sets a repo up
-bin/gantry-protect requires gantry / ci-ok on the default branch (ruleset)
+bin/gantry-protect requires gantry / ci-ok, plus any --require, on the default branch (ruleset)
 scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 preview-railway.mjs: Railway adapter, finds and checks the preview URL
                 preview-vercel.mjs: Vercel adapter, reads the GitHub deployment status
