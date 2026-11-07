@@ -105,6 +105,9 @@ config, so it is safe to turn everything on everywhere.
 jobs:
   gantry:
     uses: guangshinhaha/gantry/.github/workflows/ci.yml@main
+    permissions:
+      contents: read
+      pull-requests: read
     with:
       node: false
 ```
