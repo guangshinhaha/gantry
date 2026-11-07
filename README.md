@@ -67,8 +67,9 @@ Today, `template/CLAUDE.md` still assumes shinstack is installed. See [#29](http
   below.
 - Optional: **Lighthouse scan** of the preview (scores and top failing
   audits in the same PR comment). See below.
-- **Docs-only changes** (`docs/**`, `*.md`) skip the checks above inside the
-  job, so the status still reports green instead of sitting on "pending".
+- **Docs-only changes** (`docs/**`, `*.md`) always run the secret scan, because
+  a key can be pasted into a doc. They skip the other checks above inside the
+  job, so the status still reports instead of sitting on "pending".
 - **`gantry / ci-ok`**: one summary check. It fails if any job failed or was
   cancelled; skipped jobs count as passing. This is the check to require.
 - Optional: **second review by Claude** (see below). Runs once when a PR opens
@@ -298,8 +299,8 @@ When one turns out to be useful everywhere, move it here.
 ```
 hooks/          lefthook configs: base (every repo), node, prisma, nextjs
 .github/workflows/
-  ci.yml        shared CI that repos call: gate (merged-PR / docs-only skip),
-                secrets, node, then ci-ok (the one required check)
+  ci.yml        shared CI that repos call: gate (merged-PR skip; docs-only runs
+                secrets only), secrets, node, then ci-ok (the one required check)
   mutation.yml  shared mutation testing that repos call
   preview.yml   shared preview smoke tests. Platform-neutral; the only
                 platform-specific part is one "Find preview URL" step per platform.
