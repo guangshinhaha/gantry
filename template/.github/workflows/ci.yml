@@ -1,5 +1,5 @@
 name: ci
-# Docs-only changes are skipped inside the shared workflow (not with paths-ignore),
+# Docs-only changes run only the secret scan inside the shared workflow (not with paths-ignore),
 # so the required `gantry / ci-ok` check still reports.
 on:
   push:
