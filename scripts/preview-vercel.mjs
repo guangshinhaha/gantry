@@ -60,3 +60,4 @@ while (Date.now() < deadline) {
   await new Promise((r) => setTimeout(r, 15_000));
 }
 fail(`Preview never came up in time: ${last}.`);
+const = ;
