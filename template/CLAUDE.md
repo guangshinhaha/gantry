@@ -4,8 +4,6 @@
 
 ## Commands
 
-- `npm test` — unit tests
-- `npm run lint` / `npx tsc --noEmit`
 - `npm run dev` — local dev server
 
 ## Gates
@@ -24,7 +22,7 @@ files) collide under the default parallelism: pass `--test-concurrency=1`.
 
 ## Working style
 
-This repo uses the shinstack plugin (github.com/guangshinhaha/shinstack). On a non-trivial code task, load the `shinstack` skill first: restate the goal and the smallest change, verify against the real thing, work in small verifiable steps. Install: `claude plugin marketplace add guangshinhaha/shinstack`, then `claude plugin install shinstack@shinstack`.
+If the shinstack plugin (github.com/guangshinhaha/shinstack) is installed, follow `shinstack:craft`, which its session hook loads. If it isn't installed, ignore this section.
 
 ## Review rules
 

@@ -34,8 +34,6 @@ A merge needs both a green check and an approval. Gantry decides whether the che
 
 Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack/blob/main/docs/decisions/shinstack-vs-shinfactory.md).
 
-Today, `template/CLAUDE.md` still assumes shinstack is installed. See [#29](https://github.com/guangshinhaha/gantry/issues/29).
-
 ## What runs when
 
 **On every commit** (fast, staged files only)
