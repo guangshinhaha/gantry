@@ -42,10 +42,10 @@ function commandsIn(script, expanding = new Set()) {
 }
 const toolsIn = (commands) => tools.filter((tool) => commands.some((command) => command.name === tool));
 
-// format, fmt, reformat, formats, formatting, formatter and their camelCase forms, but not
-// formatjs or information.
+// format, fmt, reformat, formats, formatting, formatter, their npm pre/post hooks
+// and camelCase forms, but not formatjs or information.
 const isFormatScript = (name) =>
-  /(^|[^a-z])(re)?(format|fmt)(ting|ter|s)?([^a-z]|$)|(^|[a-z])(Format|Fmt)(ting|ter|s)?([^a-z]|$)/.test(name);
+  /(^|[^a-z])(pre|post|re)?(format|fmt)(ting|ter|s)?([^a-z]|$)|(^|[a-z])(Format|Fmt)(ting|ter|s)?([^a-z]|$)/.test(name);
 const all = Object.entries(scripts).flatMap(([name, script]) => commandsIn(script, new Set([name]))).filter((command) => tools.includes(command.name));
 const formatScripts = Object.keys(scripts).filter(isFormatScript);
 // A format script with no supported tool runs another formatter. One that runs a

@@ -462,3 +462,11 @@ test("a format script that runs prettier on some paths and another tool isn't ev
     assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
     assert.equal(existsSync(join(dir, "prettier.args")), false);
   }));
+
+test("a pre or post hook of a format script counts as a format script", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", pkg({ scripts: { preformat: "dprint fmt", format: 'prettier --write "**/*.md"' } }));
+    installFormatter(dir, "prettier");
+    assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
+    assert.equal(existsSync(join(dir, "prettier.args")), false);
+  }));
