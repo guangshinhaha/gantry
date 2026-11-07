@@ -5,10 +5,10 @@
 //
 // Opens draft PRs on the sandbox repo whose caller workflow is pinned to
 // ci.yml@<sha>, waits for their `ci` runs, and checks each job's result:
-//   clean      a normal code change           ci-ok green
+//   clean      code plus a doc                all green, node ran
 //   failing    a failing unit test            node and ci-ok red, at "Unit tests"
 //   docs-only  a docs-only change             secret scan runs, node skipped, green
-//   key        a planted, made-up key         secrets and ci-ok red, node green
+//   key        a made-up key in docs/, plus code   secrets and ci-ok red, node green
 // Exits 1 if any result differs. Needs `gh` signed in with Contents, Pull
 // requests and Workflows write plus Actions read on the sandbox (GH_TOKEN).
 //
@@ -27,23 +27,25 @@ const CALLER = ".github/workflows/ci.yml";
 const PIN = /(guangshinhaha\/gantry\/\.github\/workflows\/ci\.yml)@[^\s#]+/;
 
 // A made-up key in the shape gitleaks' generic-api-key rule catches. Random per
-// run, so it never matches a real credential.
+// run, so it never matches a real credential. Letters and digits alternate:
+// gitleaks ignores a value that contains a stopword such as "deck" or "vpn",
+// which random letters sometimes spell.
 export function fakeKey() {
-  let k = "";
-  while (!/[0-9]/.test(k) || !/[a-z]/.test(k)) {
-    k = [...randomBytes(32)].map((b) => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
-  }
-  return k;
+  const abc = "abcdefghijklmnopqrstuvwxyz";
+  return [...randomBytes(32)].map((b, i) => (i % 2 ? String(b % 10) : abc[b % 26])).join("");
 }
 
 // Each scenario: the files its PR adds or changes, and the job results ci.yml
 // must give. `step` names a node step that must be the one that failed.
 export function scenarios(runId, { quotaTest }) {
+  const code = `// Made by gantry's self-test. Fake data, safe to delete.\nexport const selftestRun = "${runId}";\n`;
   return [
     {
       name: "clean",
+      // A doc next to code: node must still run on a mixed PR.
       files: {
-        "src/selftest.ts": `// Made by gantry's self-test. Fake data, safe to delete.\nexport const selftestRun = "${runId}";\n`,
+        "src/selftest.ts": code,
+        "docs/selftest-clean.md": `# Self-test\n\nMade by gantry's self-test run ${runId}. Safe to delete.\n`,
       },
       expect: { gate: "success", secrets: "success", node: "success", "ci-ok": "success" },
     },
@@ -65,8 +67,11 @@ export function scenarios(runId, { quotaTest }) {
     {
       name: "key",
       last: true,
+      // The key sits in docs/, where a pasted key is most likely and where a
+      // scan that skipped docs would miss it. The code file makes node run.
       files: {
-        "selftest-fake-key.txt": `# FAKE key planted by gantry's self-test. Not a real credential.\napi_key = "${fakeKey()}"\n`,
+        "docs/selftest-fake-key.md": `# FAKE key planted by gantry's self-test. Not a real credential.\n\napi_key = "${fakeKey()}"\n`,
+        "src/selftest.ts": code,
       },
       expect: { gate: "success", secrets: "failure", node: "success", "ci-ok": "failure" },
     },

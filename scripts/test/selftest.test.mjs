@@ -32,11 +32,20 @@ test("docs-only touches only docs, the others touch code", () => {
   }
 });
 
-test("fake keys are random 32-char base36 with letters and digits", () => {
+test("clean and key mix a doc with code; the key sits in docs/", () => {
+  for (const name of ["clean", "key"]) {
+    const files = Object.keys(sc(name).files);
+    assert.ok(files.some((f) => f.startsWith("docs/")), name);
+    assert.ok(files.some((f) => f.startsWith("src/")), name);
+  }
+  assert.ok(Object.entries(sc("key").files).some(([f, t]) => f.startsWith("docs/") && t.includes("api_key")));
+});
+
+test("fake keys are 32 random chars, never two letters in a row", () => {
   const a = fakeKey();
-  assert.match(a, /^(?=.*[0-9])(?=.*[a-z])[a-z0-9]{32}$/);
+  assert.match(a, /^([a-z][0-9]){16}$/);
   assert.notEqual(a, fakeKey());
-  assert.match(sc("key").files["selftest-fake-key.txt"], /FAKE/);
+  assert.match(sc("key").files["docs/selftest-fake-key.md"], /FAKE/);
 });
 
 test("a run matching the scenario has no problems", () => {

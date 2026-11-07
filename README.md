@@ -387,7 +387,7 @@ their next daily re-fetch, CI on their next run. Test changes on one repo first.
 
 A PR that changes `ci.yml` gets the `gantry-selftest` check. It opens four draft
 PRs in gantry-sandbox against that PR's `ci.yml`: a normal change (must go green),
-a failing test and a planted made-up key (both must turn `gantry / ci-ok` red),
+a failing test and a made-up key planted in `docs/` (both must turn `gantry / ci-ok` red),
 and a docs-only change (must run the secret scan and skip node). It closes them
 and deletes their branches when done. To run it from your machine, signed in to
 `gh`: `node scripts/selftest.mjs --gantry-sha <pushed sha>`. Don't run two at
