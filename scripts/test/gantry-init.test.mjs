@@ -226,7 +226,7 @@ test("biome: runs through its format command, found from its scoped package name
     installFormatter(dir, "biome");
     init(dir, "--no-mutation");
     const args = argsOf(dir, "biome");
-    assert.deepEqual(args.slice(0, 2), ["format", "--write"]);
+    assert.deepEqual(args.slice(0, 4), ["format", "--write", "--no-errors-on-unmatched", "--files-ignore-unknown=true"]);
     assert.ok(args.includes("lefthook.yml"));
   }));
 
@@ -253,7 +253,9 @@ test("a failed install still exits non-zero, but formats what was already added"
     put(dir, "package.json", VITEST_OXFMT);
     installFormatter(dir, "oxfmt");
     assert.equal(initWithNpm(dir, 7).status, 7);
-    assert.ok(argsOf(dir, "oxfmt").includes("lefthook.yml"));
+    const args = argsOf(dir, "oxfmt");
+    assert.ok(args.includes("lefthook.yml"));
+    assert.ok(args.includes("stryker.config.mjs"), "written just before the install that failed");
   }));
 
 test("a formatter is picked once, even when the run exits after formatting", () =>
@@ -268,11 +270,10 @@ test("a formatter is picked once, even when the run exits after formatting", () 
 
 const runsTool = {
   "npx prettier@3 --write .": "prettier",
-  "npx --yes prettier --check .": "prettier",
   "pnpm dlx oxfmt@latest": "oxfmt",
   "pnpm exec prettier --check .": "prettier",
   "yarn prettier --check .": "prettier",
-  "sh -c 'oxfmt .'": "oxfmt",
+  "yarn run prettier --check .": "prettier",
   "cross-env CI=1 oxfmt .": "oxfmt",
   "NODE_ENV=ci oxfmt .": "oxfmt",
   "./node_modules/.bin/biome format .": "biome",
@@ -288,7 +289,14 @@ for (const [command, tool] of Object.entries(runsTool)) {
     }));
 }
 
-for (const command of ["eslint --fix --plugin prettier .", "dprint fmt --config config/prettier"]) {
+for (const command of [
+  "eslint --fix --plugin prettier .",
+  "dprint fmt --config config/prettier",
+  "pnpm --filter prettier exec tsc",
+  'npm ls | grep -E "eslint|prettier"',
+  "sh -c 'prettier --write .'",
+  "npx --yes prettier --check .",
+]) {
   test(`script "${command}" doesn't run prettier`, () =>
     withRepo((dir) => {
       put(dir, "package.json", pkg({ scripts: { format: command } }));
@@ -335,4 +343,60 @@ test("a format script for another tool beats prettier in an unrelated script", (
     installFormatter(dir, "prettier");
     assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
     assert.equal(existsSync(join(dir, "prettier.args")), false);
+  }));
+
+// Each is a repo where running the one visible formatter on the added files
+// could turn its real check red, so it warns and runs nothing.
+const ambiguous = {
+  "a partial prettier script next to a format script for another tool": {
+    scripts: { format: "dprint fmt", "format:md": 'prettier --write "**/*.md"' },
+  },
+  "a camelCase format script for another tool": {
+    scripts: { formatCheck: "dprint check" }, devDependencies: { prettier: "3.0.0" },
+  },
+  "a dotted format script for another tool": {
+    scripts: { "format.check": "dprint check" }, devDependencies: { prettier: "3.0.0" },
+  },
+  "prettier in an unrelated script, biome declared": {
+    scripts: { gen: "codegen && prettier --write src/gen" },
+    devDependencies: { "@biomejs/biome": "2.0.0", prettier: "3.0.0" },
+  },
+  "a config file passed on the command line": {
+    scripts: { "format:check": "prettier --config config/prettier.json --check ." },
+  },
+  "a style option passed on the command line": {
+    scripts: { format: "prettier --single-quote --write ." },
+  },
+  "biome's config path passed on the command line": {
+    scripts: { format: "biome format --config-path=config --write ." },
+  },
+};
+for (const [name, fields] of Object.entries(ambiguous)) {
+  test(`warns and runs nothing: ${name}`, () =>
+    withRepo((dir) => {
+      put(dir, "package.json", pkg(fields));
+      installFormatter(dir, "prettier");
+      installFormatter(dir, "biome");
+      assert.match(init(dir, "--no-mutation"), /! .*run your formatter/i);
+      assert.equal(existsSync(join(dir, "prettier.args")), false);
+      assert.equal(existsSync(join(dir, "biome.args")), false);
+    }));
+}
+
+test("a format script that calls another script runs what that script runs", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", pkg({
+      scripts: { format: "prettier --write .", "format:check": "npm run format -- --check" },
+    }));
+    installFormatter(dir, "prettier");
+    init(dir, "--no-mutation");
+    assert.ok(existsSync(join(dir, "prettier.args")));
+  }));
+
+test("a script named after its tool isn't read as a call to itself", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", pkg({ scripts: { prettier: "prettier --check .", format: "npm run prettier" } }));
+    installFormatter(dir, "prettier");
+    init(dir, "--no-mutation");
+    assert.ok(existsSync(join(dir, "prettier.args")));
   }));
