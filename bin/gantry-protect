@@ -98,3 +98,4 @@ else
   echo "created ruleset gantry on $REPO"
 fi
 echo "required checks: $NAMES"
+
