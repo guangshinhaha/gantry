@@ -35,7 +35,9 @@ jobs:
   # Decides which real jobs run. A push to main that is a merged PR skips them
   # all, because its CI already ran on the pull_request event. A change that only
   # touches docs skips everything except the secret scan, because a key can be
-  # pasted into a doc. The node job also skips when the caller sets `node: false`
+  # pasted into a doc. "Only docs" means *.md and docs or images under docs/,
+  # counting both names of a rename, and never a file list the API may have cut
+  # off (gantry#59, #60, #61, #62). The node job also skips when the caller sets `node: false`
   # or the repo has no package.json, and the reason goes in this job's summary.
   # A package.json only in a subfolder fails the node job instead (gantry#66).
   # Skipping happens here, not via workflow-level paths-ignore: a required check
@@ -70,15 +72,49 @@ jobs:
             if [ "$merged" -gt 0 ]; then merged_pr=true; echo "Already tested in its PR."; fi
           fi
           if [ "$merged_pr" = false ]; then
+            # `files` holds every path the change touches that the API listed,
+            # and `complete` says whether that is all of them. An incomplete
+            # list is never docs-only. A rename lists both names: one JSON line
+            # per file carries filename and previous_filename, and the line
+            # count is the file count.
             files=""
+            complete=false
             if [ "$EVENT" = pull_request ]; then
-              files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+              entries=$(gh api --paginate "repos/$REPO/pulls/$PR/files" \
+                --jq '.[] | {f: .filename, p: .previous_filename} | @json')
+              changed=$(gh api "repos/$REPO/pulls/$PR" --jq .changed_files)
+              listed=$(printf '%s\n' "$entries" | grep -c . || true)
+              # The files API stops at 3000, so a shorter list than the PR's
+              # changed_files hides the rest (gantry#61).
+              files=$(printf '%s\n' "$entries" | jq -r '.f, (.p // empty)')
+              if [[ "$changed" =~ ^[0-9]+$ ]] && [ "$listed" -ge "$changed" ]; then
+                complete=true
+              else
+                echo "Changed-file list is incomplete ($listed of ${changed:-unknown}), so this is not treated as docs-only."
+              fi
             elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
-              files=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" --jq '.files[].filename') || files=""
+              entries=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" \
+                --jq '.files[] | {f: .filename, p: .previous_filename} | @json') || entries=""
+              listed=$(printf '%s\n' "$entries" | grep -c . || true)
+              # The compare API lists at most 300 files and has no next page, so
+              # a full list may be cut off (gantry#62).
+              files=$(printf '%s\n' "$entries" | jq -r '.f, (.p // empty)')
+              if [ "$listed" -lt 300 ]; then
+                complete=true
+              else
+                echo "Compare lists $listed files, the API's cap, so this is not treated as docs-only."
+              fi
             fi
-            # Docs-only = at least one file and every file is docs/** or *.md.
-            other=$(printf '%s\n' "$files" | grep -vE '^docs/|\.md$' || true)
-            if [ -n "$files" ] && [ -z "$other" ]; then
+            # Docs-only = at least one file, and every file is a *.md or a doc
+            # or image under docs/. Anything else under docs/ counts as code
+            # (gantry#60): a script, template or sample there may be imported
+            # or run, and a list of code types always misses some. A *.md still
+            # counts as docs wherever it sits.
+            docfile='\.(png|jpe?g|gif|webp|svg|ico|pdf|txt|rst|adoc|markdown)$'
+            other=$({ printf '%s\n' "$files" | grep -vE '^docs/|\.md$'
+                      printf '%s\n' "$files" | grep -E '^docs/' | grep -vE '\.md$' | grep -vE "$docfile"
+                    } || true)
+            if [ "$complete" = true ] && [ -n "$files" ] && [ -z "$other" ]; then
               docs_only=true; echo "Docs-only change, running only the secret scan."
             fi
           fi
@@ -122,7 +158,14 @@ jobs:
                   | jq -r '.tree[] | select(.type == "blob") | .path | select(. == "package.json" or endswith("/package.json"))')
               fi
               nested=$(printf '%s\n' "$found" | head -n 5 | paste -sd ' ' -)
-              if [ -n "$nested" ]; then
+              # Asks jq, not the flattened list, so a name with a newline in it
+              # can't fake a line.
+              if [ -n "$(printf '%s\n' "$entries" | jq -r 'select(.f == "package.json" or .p == "package.json") | "y"')" ]; then
+                # The file list names the root package.json, and the head has
+                # none, so this change removed it or renamed it away. That
+                # isn't a repo that never had one (gantry#59).
+                node_error="this change removes or renames the root package.json, so the node job has nothing to run. Restore it, or set \`node: false\` if the project is leaving Node."
+              elif [ -n "$nested" ]; then
                 node_error="package.json is not at the repo root but was found at: $nested. gantry's node job only runs at the repo root. Move the project to the root, or set \`node: false\` and run its checks in your own workflow."
               fi
             fi
