@@ -14,11 +14,13 @@ if (!runner) off(/--test\b/.test(test) ? "node:test is too slow under Stryker" :
 // A declared range that names a version decides, since npm resolves from it; the
 // installed version counts only when it names none (*, latest, workspace:*).
 if (runner === "vitest") {
-  let version = String(deps.vitest).replace(/^npm:vitest@/, "");
+  let version = String(deps.vitest).replace(/^(npm:vitest@|workspace:)/, "");
   if (!/\d/.test(version)) {
     try { version = JSON.parse(readFileSync("node_modules/vitest/package.json", "utf8")).version; } catch {}
   }
-  const below2 = (alt) => /^\s*[\^~=v]*\s*[01](\D|$)/.test(alt) || /<\s*2(\.0)*(\s|$)|<=\s*1(\D|$)/.test(alt);
+  // A hyphen range "a - b" is below 2 only if b is; else the lowest version or an upper bound decides.
+  const below2 = (alt) => alt.includes(" - ") ? /^\s*[\^~=v]*\s*[01](\D|$)/.test(alt.split(" - ")[1])
+    : /^\s*[\^~=v]*\s*[01](\D|$)/.test(alt) || /<\s*2(\.0)*(-\S*)?(\s|$)|<=\s*1(\D|$)/.test(alt);
   if (/\d/.test(version) && version.split("||").every(below2)) off(`vitest <2: found ${version}, and the Stryker runner needs 2+`);
 }
 

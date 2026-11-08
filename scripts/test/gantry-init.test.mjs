@@ -262,8 +262,22 @@ test("a failed install warns, adds no mutation files, and the rest still runs", 
     assert.ok(!argsOf(dir, "oxfmt").includes("stryker.config.mjs"));
   }));
 
+test("pnpm repo: a failed pnpm add warns and the rest still runs", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", VITEST_OXFMT);
+    put(dir, "pnpm-lock.yaml", "");
+    put(dir, "stub-bin/pnpm", "#!/bin/sh\necho \"$@\" > pnpm.args\nexit 1\n");
+    chmodSync(join(dir, "stub-bin/pnpm"), 0o755);
+    const run = initWithNpm(dir, 0, "--review");
+    assert.equal(run.status, 0);
+    assert.match(read(dir, "pnpm.args"), /^add -D @stryker-mutator\/core @stryker-mutator\/vitest-runner/);
+    assert.match(run.stdout, /! .*install failed.*mutation testing is off/i);
+    assert.ok(existsSync(join(dir, ".github/workflows/review.yml")));
+    assert.equal(existsSync(join(dir, "stryker.config.mjs")), false);
+  }));
+
 const VITEST_STRYKER = (vitest) => pkg({ scripts: { test: "vitest run" }, devDependencies: { vitest } });
-for (const vitest of ["1.6.0", "^1.6.0", "~1.2.0", "1.x", ">=1.0.0 <2", "<2", "npm:vitest@1.6.0", "0.34.6", "^1.0.0 || ~1.6.0"]) {
+for (const vitest of ["1.6.0", "^1.6.0", "~1.2.0", "1.x", ">=1.0.0 <2", "<2", "npm:vitest@1.6.0", "0.34.6", "^1.0.0 || ~1.6.0", ">=1.0.0 <2.0.0-0", "1.0.0 - 1.9.9", "workspace:^1.6.0", "<=1.x"]) {
   test(`vitest ${vitest} in package.json: mutation is off, no install, the rest still runs`, () =>
     withRepo((dir) => {
       put(dir, "package.json", VITEST_STRYKER(vitest));
@@ -290,7 +304,7 @@ test("a declared vitest 2 range decides over a stale installed vitest 1", () =>
     assert.match(initWithNpm(dir, 0).stdout, /install .*vitest-runner/);
   }));
 
-for (const vitest of ["^2.1.0", "3.2.4", "latest", ">=1.6", "^1.6.0 || ^2.0.0", "10.0.0"]) {
+for (const vitest of ["^2.1.0", "3.2.4", "latest", ">=1.6", "^1.6.0 || ^2.0.0", "10.0.0", "1.0.0 - 2.0.0", "workspace:*"]) {
   test(`vitest ${vitest}: mutation is set up`, () =>
     withRepo((dir) => {
       put(dir, "package.json", VITEST_STRYKER(vitest));
