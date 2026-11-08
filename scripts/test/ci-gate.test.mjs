@@ -41,15 +41,26 @@ case "$*" in
     esac ;;
   *"/git/trees/"*"recursive=1"*)
     [ "$STUB_TREE" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }
+    [ -n "$STUB_TREE_BODY" ] && { printf '%s' "$STUB_TREE_BODY"; exit 0; }
     cat "$STUB_TREE" ;;
   *) echo "stub gh: unexpected $*" >&2; exit 2 ;;
 esac
 `;
+const GIT = `#!/bin/bash
+case "$*" in
+  *" init "*|init*) mkdir -p "\${@: -1}" ;;
+  *" fetch "*) [ "$STUB_GIT_PATHS" = fail ] && { echo "fatal: stub" >&2; exit 128; }; exit 0 ;;
+  *" ls-tree "*) printf '%s\\n' "$STUB_GIT_PATHS" | tr '\\n' '\\0' ;;
+  *) echo "stub git: unexpected $*" >&2; exit 2 ;;
+esac
+`;
 
-function runGate({ root, tree = [], truncated = false, treeFails = false, node = "true" }) {
+function runGate({ root, tree = [], truncated = false, treeFails = false, treeBody = "", gitPaths = null, node = "true" }) {
   const dir = mkdtempSync(join(tmpdir(), "gantry-gate-"));
   writeFileSync(join(dir, "gh"), GH);
   chmodSync(join(dir, "gh"), 0o755);
+  writeFileSync(join(dir, "git"), GIT);
+  chmodSync(join(dir, "git"), 0o755);
   const treeFile = join(dir, "tree.json");
   writeFileSync(
     treeFile,
@@ -64,7 +75,8 @@ function runGate({ root, tree = [], truncated = false, treeFails = false, node =
         PATH: `${dir}:${process.env.PATH}`,
         GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary,
         REPO: "o/r", EVENT: "pull_request", PR: "1", SHA: "abc", BEFORE: "",
-        NODE_INPUT: node, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile,
+        NODE_INPUT: node, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
+        RUNNER_TEMP: dir, GITHUB_SERVER_URL: "https://github.com", GH_TOKEN: "t",
       },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
     });
@@ -116,17 +128,40 @@ test("a file that only ends in package.json doesn't count", () => {
   assert.equal(r.outputs.node_error ?? "", "");
 });
 
-test("truncated tree with no package.json seen: fails closed", () => {
-  const r = runGate({ root: 404, tree: ["a.md"], truncated: true });
-  assert.equal(r.outputs.run_node, "false");
-  assert.match(r.outputs.node_error, /node: false/);
-});
+// A truncated tree falls back to a blobless shallow fetch, stubbed here: `git
+// ls-tree` prints STUB_GIT_PATHS (newline-separated), or the fetch fails.
+for (const [name, paths, expect] of [
+  ["no package.json anywhere: skips, as before", "a.md\nsrc/x.go", "skip"],
+  ["nested package.json: node fails", "a.md\nweb/package.json", "fail"],
+  ["fetch fails: gate fails", null, "gate"],
+]) {
+  test(`truncated tree, ${name}`, () => {
+    const r = runGate({ root: 404, tree: ["a.md"], truncated: true, gitPaths: paths });
+    if (expect === "gate") {
+      assert.notEqual(r.status, 0, r.log);
+      assert.match(r.log, /could not list/);
+      return;
+    }
+    assert.equal(r.status, 0, r.log);
+    assert.equal(r.outputs.run_node, "false");
+    if (expect === "skip") assert.equal(r.outputs.node_error ?? "", "");
+    else assert.match(r.outputs.node_error, /web\/package\.json.*node: false/);
+  });
+}
 
 test("tree API error fails the gate, like a contents API error", () => {
   const r = runGate({ root: 404, treeFails: true });
   assert.notEqual(r.status, 0);
   assert.match(r.log, /could not list/);
 });
+
+for (const [name, treeBody] of [["null tree", '{"tree":null,"truncated":false}'], ["HTML", "<html>oops</html>"], ["empty", " "]]) {
+  test(`unreadable tree body (${name}) fails the gate instead of skipping`, () => {
+    const r = runGate({ root: 404, treeBody });
+    assert.notEqual(r.status, 0, r.log);
+    assert.match(r.log, /could not list/);
+  });
+}
 
 test("contents API error still fails the gate", () => {
   const r = runGate({ root: 500 });

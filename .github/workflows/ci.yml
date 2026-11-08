@@ -97,17 +97,29 @@ jobs:
               esac
               # No root package.json. A nested one means a Node project the job
               # can't run, so fail node instead of skipping it (gantry#66).
-              if ! tree=$(gh api "repos/$REPO/git/trees/$SHA?recursive=1"); then
+              # Also checks the body is a tree: the step has no pipefail, so a
+              # jq error below would otherwise read as "no package.json".
+              if ! tree=$(gh api "repos/$REPO/git/trees/$SHA?recursive=1") \
+                || ! printf '%s' "$tree" | jq -e '.tree | type == "array"' >/dev/null 2>&1; then
                 echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
               fi
-              nested=$(printf '%s' "$tree" \
-                | jq -r '.tree[] | select(.type == "blob") | .path | select(test("(^|/)package\\.json$"))' \
-                | head -n 5 | paste -sd ' ' -)
-              fix="gantry's node job only runs at the repo root. Move the project to the root, or set \`node: false\` and run its checks in your own workflow."
+              if [ "$(printf '%s' "$tree" | jq -r .truncated)" = true ]; then
+                # Too many files for the API. A shallow fetch without file
+                # contents lists every path in a few seconds.
+                dir="$RUNNER_TEMP/gantry-tree"
+                if ! { git init -q "$dir" \
+                  && git -C "$dir" fetch -q --depth 1 --filter=blob:none \
+                    "https://x-access-token:$GH_TOKEN@${GITHUB_SERVER_URL#https://}/$REPO" "$SHA" \
+                  && git -C "$dir" ls-tree -r -z --name-only FETCH_HEAD > "$dir.paths"; }; then
+                  echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
+                fi
+                paths=$(tr '\0' '\n' < "$dir.paths")
+              else
+                paths=$(printf '%s' "$tree" | jq -r '.tree[] | select(.type == "blob") | .path')
+              fi
+              nested=$(printf '%s\n' "$paths" | grep -E '(^|/)package\.json$' | head -n 5 | paste -sd ' ' -)
               if [ -n "$nested" ]; then
-                node_error="package.json is not at the repo root but was found at: $nested. $fix"
-              elif [ "$(printf '%s' "$tree" | jq -r .truncated)" = true ]; then
-                node_error="no package.json at the repo root, and the repo is too big to check for a nested one. $fix"
+                node_error="package.json is not at the repo root but was found at: $nested. gantry's node job only runs at the repo root. Move the project to the root, or set \`node: false\` and run its checks in your own workflow."
               fi
             fi
             if [ -n "$node_error" ]; then
