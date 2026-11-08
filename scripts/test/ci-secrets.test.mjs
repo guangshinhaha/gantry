@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,10 +30,14 @@ function stepScript() {
   return body.join("\n");
 }
 
-// Stub curl logs its URL and writes junk to -o, so the checksum must fail.
+// Stub curl logs its URL and serves a well-formed tarball whose gitleaks only
+// says it ran. Its sha256 can't match, so that gitleaks must never run.
 const CURL = `#!/bin/bash
 echo "$*" >> "$STUB_LOG"
-while [ $# -gt 0 ]; do [ "$1" = -o ] && { echo junk > "$2"; }; shift; done
+while [ $# -gt 0 ]; do [ "$1" = -o ] && cp "$STUB_TARBALL" "$2"; shift; done
+`;
+const TAMPERED = `#!/bin/bash
+echo "tampered gitleaks ran"
 `;
 const GITLEAKS = `#!/bin/bash
 echo "stub gitleaks $*"
@@ -47,12 +51,18 @@ function runStep({ os, arch, onPath = false }) {
     writeFileSync(join(dir, "gitleaks"), GITLEAKS);
     chmodSync(join(dir, "gitleaks"), 0o755);
   }
+  const src = join(dir, "src");
+  mkdirSync(src);
+  writeFileSync(join(src, "gitleaks"), TAMPERED);
+  chmodSync(join(src, "gitleaks"), 0o755);
+  const tarball = join(dir, "stub.tar.gz");
+  execFileSync("tar", ["-czf", tarball, "-C", src, "gitleaks"]);
   const log = join(dir, "curl.log");
   let status = 0, out = "";
   try {
     // System dirs only, so a gitleaks installed on this machine isn't found.
     out = execFileSync("bash", ["-e", "-c", stepScript()], {
-      env: { PATH: `${dir}:/usr/bin:/bin:/usr/sbin:/sbin`, RUNNER_OS: os, RUNNER_ARCH: arch, RUNNER_TEMP: dir, STUB_LOG: log },
+      env: { PATH: `${dir}:/usr/bin:/bin:/usr/sbin:/sbin`, RUNNER_OS: os, RUNNER_ARCH: arch, RUNNER_TEMP: dir, STUB_LOG: log, STUB_TARBALL: tarball },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (e) {
@@ -71,10 +81,10 @@ for (const [os, arch, platform] of [
     const r = runStep({ os, arch });
     assert.match(r.urls, new RegExp(`/v8\\.30\\.1/gitleaks_8\\.30\\.1_${platform}\\.tar\\.gz`));
     assert.equal(r.urls.trim().split("\n").length, 1, r.urls);
-    // The stub's junk tarball must be rejected before tar or gitleaks run.
+    // The stub's tarball must be rejected before tar or gitleaks run.
     assert.notEqual(r.status, 0, r.out);
     assert.match(r.out, /FAILED|did NOT match/i);
-    assert.doesNotMatch(r.out, /stub gitleaks/);
+    assert.doesNotMatch(r.out, /tampered gitleaks ran|stub gitleaks/);
   });
 }
 
@@ -102,4 +112,17 @@ test("the gitleaks step runs in bash on every OS", () => {
   const yml = readFileSync(CI, "utf8");
   const step = yml.slice(yml.indexOf("- name: gitleaks"), yml.indexOf("run: |", yml.indexOf("- name: gitleaks")));
   assert.match(step, /^\s+shell: bash\s*$/m);
+});
+
+// The sha256 values from the v8.30.1 release's gitleaks_8.30.1_checksums.txt.
+// A hash pasted onto the wrong platform would turn that platform red.
+test("each platform pins its own release sha256", () => {
+  const yml = readFileSync(CI, "utf8");
+  const pinned = Object.fromEntries([...yml.matchAll(/platform=(\w+);\s+sha256=([0-9a-f]{64})/g)].map((m) => [m[1], m[2]]));
+  assert.deepEqual(pinned, {
+    linux_x64: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+    linux_arm64: "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080",
+    darwin_x64: "dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709",
+    darwin_arm64: "b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5",
+  });
 });
