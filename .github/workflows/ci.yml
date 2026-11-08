@@ -37,6 +37,7 @@ jobs:
   # touches docs skips everything except the secret scan, because a key can be
   # pasted into a doc. The node job also skips when the caller sets `node: false`
   # or the repo has no package.json, and the reason goes in this job's summary.
+  # A package.json only in a subfolder fails the node job instead (gantry#66).
   # Skipping happens here, not via workflow-level paths-ignore: a required check
   # whose workflow never starts stays "pending" forever, but a skipped job still
   # lets ci-ok report success.
@@ -49,6 +50,7 @@ jobs:
     outputs:
       merged_pr: ${{ steps.check.outputs.merged_pr }}
       run_node: ${{ steps.check.outputs.run_node }}
+      node_error: ${{ steps.check.outputs.node_error }}
     steps:
       - id: check
         env:
@@ -83,6 +85,7 @@ jobs:
           run_node=false
           if [ "$merged_pr" = false ] && [ "$docs_only" = false ]; then
             skip_reason=""
+            node_error=""
             if [ "$NODE_INPUT" != true ]; then
               skip_reason="the caller set node: false"
             elif ! err=$(gh api "repos/$REPO/contents/package.json?ref=$SHA" --silent 2>&1); then
@@ -92,8 +95,41 @@ jobs:
                 *"Not Found (HTTP 404)"*) skip_reason="no package.json in this repo" ;;
                 *) echo "::error::could not check for package.json: $err"; exit 1 ;;
               esac
+              # No root package.json. A nested one means a Node project the job
+              # can't run, so fail node instead of skipping it (gantry#66).
+              # Also checks the body is a tree: the step has no pipefail, so a
+              # jq error below would otherwise read as "no package.json".
+              if ! tree=$(gh api "repos/$REPO/git/trees/$SHA?recursive=1") \
+                || ! printf '%s' "$tree" | jq -e '.tree | type == "array"' >/dev/null 2>&1; then
+                echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
+              fi
+              if [ "$(printf '%s' "$tree" | jq -r .truncated)" = true ]; then
+                # Too many files for the API. A shallow fetch without file
+                # contents lists every path in a few seconds.
+                dir="$RUNNER_TEMP/gantry-tree"
+                if ! { git init -q "$dir" \
+                  && git -C "$dir" fetch -q --depth 1 --filter=blob:none \
+                    "https://x-access-token:$GH_TOKEN@${GITHUB_SERVER_URL#https://}/$REPO" "$SHA" \
+                  && git -C "$dir" ls-tree -r --name-only FETCH_HEAD > "$dir.paths"; }; then
+                  echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
+                fi
+                # git quotes and escapes any name with a quote, newline or
+                # non-ASCII byte, so each line is one ASCII name and a newline
+                # can't fake a match. LC_ALL=C -a: never "binary file matches".
+                found=$(LC_ALL=C grep -a -E '(^"?|/)package\.json"?$' "$dir.paths" || true)
+              else
+                found=$(printf '%s' "$tree" \
+                  | jq -r '.tree[] | select(.type == "blob") | .path | select(. == "package.json" or endswith("/package.json"))')
+              fi
+              nested=$(printf '%s\n' "$found" | head -n 5 | paste -sd ' ' -)
+              if [ -n "$nested" ]; then
+                node_error="package.json is not at the repo root but was found at: $nested. gantry's node job only runs at the repo root. Move the project to the root, or set \`node: false\` and run its checks in your own workflow."
+              fi
             fi
-            if [ -z "$skip_reason" ]; then
+            if [ -n "$node_error" ]; then
+              echo "Node checks failed: $node_error" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::$node_error"
+            elif [ -z "$skip_reason" ]; then
               run_node=true
             else
               echo "Node checks skipped: $skip_reason" >> "$GITHUB_STEP_SUMMARY"
@@ -102,6 +138,7 @@ jobs:
           fi
           echo "merged_pr=$merged_pr" >> "$GITHUB_OUTPUT"
           echo "run_node=$run_node" >> "$GITHUB_OUTPUT"
+          echo "node_error=${node_error:-}" >> "$GITHUB_OUTPUT"
 
   secrets:
     needs: gate
@@ -122,10 +159,20 @@ jobs:
 
   node:
     # Node/TS repos only: gate skips this job for a repo with no package.json.
+    # It fails instead when package.json is only in a subfolder (gate sets
+    # node_error), so a moved project can't turn ci-ok green unchecked.
     needs: gate
-    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.run_node == 'true' }}
+    if: ${{ !cancelled() && needs.gate.result == 'success' && (needs.gate.outputs.run_node == 'true' || needs.gate.outputs.node_error != '') }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     steps:
+      - name: Find package.json
+        if: ${{ needs.gate.outputs.node_error != '' }}
+        env:
+          NODE_ERROR: ${{ needs.gate.outputs.node_error }}
+        run: |
+          echo "::error::$NODE_ERROR"
+          exit 1
+
       - uses: actions/checkout@v4
 
       - name: Detect package manager

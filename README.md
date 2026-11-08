@@ -87,7 +87,9 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   when app code changed.
 
 Every check skips itself when a repo doesn't have the relevant script or
-config, so it is safe to turn everything on everywhere.
+config, so it is safe to turn everything on everywhere. One exception: a repo
+with a `package.json` only in a subfolder fails the node job until you move
+the project to the root or set `node: false` (see below).
 
 ## Repos that aren't plain Node
 
@@ -97,6 +99,10 @@ config, so it is safe to turn everything on everywhere.
 
 - **No `package.json`** (a repo in any other language): the job skips with no
   setting needed.
+- **`package.json` only in a subfolder** (such as `app/package.json`): the job
+  fails, because it only runs at the repo root and skipping would let a broken
+  project pass. Move the project to the root, or set `node: false` and run its
+  checks in your own workflow.
 - **A `package.json` in a repo with its own test workflow:** set `node: false`.
   Use it when gantry's job can't run the repo's checks, such as shinfactory,
   whose `test` script is `go test ./...` and needs the UI built first.
@@ -360,7 +366,8 @@ When one turns out to be useful everywhere, move it here.
 hooks/          lefthook configs: base (every repo), node, prisma, nextjs
 .github/workflows/
   ci.yml        shared CI that repos call: gate (merged-PR skip; docs-only runs
-                secrets only; no package.json or `node: false` skips node),
+                secrets only; no package.json or `node: false` skips node,
+                a package.json only in a subfolder fails it),
                 secrets, node, then ci-ok (the one required check)
   mutation.yml  shared mutation testing that repos call
   preview.yml   shared preview smoke tests. Platform-neutral; the only
