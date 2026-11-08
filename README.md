@@ -202,7 +202,9 @@ kill a mutant. If a change makes no real difference, it marks the line
 - A hard 15-minute cap. Public repos don't use Actions minutes at all.
 
 It's on by default for Vitest and Jest repos. It's off for node:test (too slow
-under Stryker), monorepos and repos without tests. It reports only and never
+under Stryker), Vitest 1 (Stryker's runner needs Vitest 2+), monorepos and
+repos without tests. If the Stryker install fails, gantry-init warns, leaves
+mutation testing off and carries on. It reports only and never
 blocks a merge, unless you set `thresholds.break` in `stryker.config.mjs`.
 Two cases stay green and are explained in the comment: changed files that no
 test covers (it names them), and existing tests that already fail (mutation

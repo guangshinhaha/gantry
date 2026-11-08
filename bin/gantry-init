@@ -112,14 +112,20 @@ if [ "$MUTATION" = 1 ] && [ -f package.json ]; then
     case "$plan" in
       off:*) echo "  skip   mutation testing (${plan#off: })" ;;
       *)
-        copy "$GANTRY_DIR/template/.github/workflows/mutation.yml" .github/workflows/mutation.yml
-        echo "  add    stryker.config.mjs"
-        ADDED="$ADDED stryker.config.mjs"
+        # A failed install turns mutation off and never stops the rest (#14).
         echo "  install $plan"
-        if [ -f pnpm-lock.yaml ]; then pnpm add -D $plan >/dev/null; else npm install -D $plan >/dev/null; fi
-        for l in ".stryker-tmp/" "reports/mutation/" "reports/stryker-incremental.json"; do
-          grep -qxF "$l" .gitignore 2>/dev/null || echo "$l" >> .gitignore
-        done
+        if [ -f pnpm-lock.yaml ]; then pm="pnpm add -D"; else pm="npm install -D"; fi
+        if $pm $plan >/dev/null; then
+          copy "$GANTRY_DIR/template/.github/workflows/mutation.yml" .github/workflows/mutation.yml
+          echo "  add    stryker.config.mjs"
+          ADDED="$ADDED stryker.config.mjs"
+          for l in ".stryker-tmp/" "reports/mutation/" "reports/stryker-incremental.json"; do
+            grep -qxF "$l" .gitignore 2>/dev/null || echo "$l" >> .gitignore
+          done
+        else
+          rm -f stryker.config.mjs
+          echo "  ! Stryker install failed (see above), so mutation testing is off. Fix it, then re-run gantry-init."
+        fi
         ;;
     esac
   fi
