@@ -11,17 +11,21 @@ const test = pkg.scripts?.test ?? "";
 const runner = deps.vitest ? "vitest" : deps.jest ? "jest" : null;
 if (!runner) off(/--test\b/.test(test) ? "node:test is too slow under Stryker" : "no Vitest or Jest tests");
 // The vitest runner needs vitest 2+, and npm refuses the install on vitest 1 (#14).
-// A single-version spec (^1.6.0, ~1.2, 1.x) pins the major npm resolves to, so it
-// decides. Any other range: the resolved version decides, from node_modules or
-// package-lock.json. With neither, go ahead; a failed install is not fatal.
+// A single-version spec (^1.6.0, ~1.2, 1.x) pins the major npm resolves to, and a
+// range whose every lower bound is 2+ (>=2, 2.x || 3.x) rules vitest 1 out, so the
+// spec decides. Any other range: the resolved version decides, from node_modules
+// or package-lock.json. With neither, go ahead; a failed install is not fatal.
 if (runner === "vitest") {
-  const declared = String(deps.vitest).trim();
+  const declared = String(deps.vitest).trim().replace(/^(npm:vitest@|workspace:)/, "");
   const json = (f) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return undefined; } };
-  const resolved = json("node_modules/vitest/package.json")?.version
-    ?? json("package-lock.json")?.packages?.["node_modules/vitest"]?.version;
-  const single = declared.match(/^(?:npm:vitest@|workspace:)?[\^~=v]?\s*(\d+)(\.[\dx*]+){0,2}(-[\w.]+)?$/i);
-  const found = single ? declared : resolved;
-  const major = Number((single?.[1]) ?? String(resolved).match(/^v?(\d+)\./)?.[1]);
+  const single = declared.match(/^[\^~=v]?\s*(\d+)(\.[\dx*]+){0,2}(-[\w.]+)?$/i);
+  const from2 = declared.split("||").every((alt) => /^\s*(>=|[\^~=v])*\s*v?([2-9]|[1-9]\d+)(\D|$)/i.test(alt));
+  let found = declared, major = Number(single?.[1]);
+  if (!single && !from2) {
+    found = json("node_modules/vitest/package.json")?.version
+      ?? json("package-lock.json")?.packages?.["node_modules/vitest"]?.version;
+    major = Number(String(found).match(/^v?(\d+)\./)?.[1]);
+  }
   if (major < 2) off(`vitest <2: found ${found}, and the Stryker runner needs 2+`);
 }
 

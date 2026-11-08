@@ -309,12 +309,14 @@ test("a range with vitest 1 in package-lock.json: mutation is off", () =>
     offRun(dir);
   }));
 
-test("a declared vitest 2 range decides over a stale installed vitest 1", () =>
-  withRepo((dir) => {
-    put(dir, "package.json", VITEST_STRYKER("^2.1.0"));
-    put(dir, "node_modules/vitest/package.json", JSON.stringify({ name: "vitest", version: "1.6.1" }));
-    assert.match(initWithNpm(dir, 0).stdout, /install .*vitest-runner/);
-  }));
+for (const vitest of ["^2.1.0", ">=2.0.0", ">=2", "2.x || 3.x", "^v2"]) {
+  test(`declared vitest ${vitest} decides over a stale installed vitest 1`, () =>
+    withRepo((dir) => {
+      put(dir, "package.json", VITEST_STRYKER(vitest));
+      put(dir, "node_modules/vitest/package.json", JSON.stringify({ name: "vitest", version: "1.6.1" }));
+      assert.match(initWithNpm(dir, 0).stdout, /install .*vitest-runner/);
+    }));
+}
 
 for (const vitest of ["^2.1.0", "3.2.4", "latest", "10.0.0", "workspace:*", "^1.6.0 || ^2.0.0", ">=1.6"]) {
   test(`vitest ${vitest}, nothing installed: mutation is set up`, () =>
