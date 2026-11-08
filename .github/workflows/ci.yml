@@ -211,7 +211,7 @@ jobs:
             range=HEAD
           fi
           count=$(git rev-list --count "$range")
-          echo "Secret scan: $count commit(s) in $range" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Secret scan: $count commit(s) in $range" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
           gitleaks detect --redact --verbose --log-opts="$range"
 
   node:

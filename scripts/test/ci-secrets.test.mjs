@@ -132,7 +132,7 @@ test("a gitleaks already on PATH is used, and the log says so", () => {
 
 // Without `shell: bash`, a Windows runner runs the step in pwsh, which fails on
 // the bash syntax before it can say "unsupported platform".
-for (const [file, name] of [[CI, "Install gitleaks"], [CI, "gitleaks"], [DAILY, "Install gitleaks"], [DAILY, "gitleaks (all branches, all history)"]]) {
+for (const [file, name] of [[CI, "Install gitleaks"], [CI, "gitleaks"], [DAILY, "Install gitleaks"], [DAILY, "gitleaks (all branches, all history)"], [DAILY, "Open or update the alert issue"]]) {
   test(`${file.split("/").pop()}: "${name}" runs in bash on every OS`, () => {
     assert.match(step(file, name).yaml, /^\s+shell: bash\s*$/m);
   });
@@ -162,12 +162,18 @@ test("each platform pins its own release sha256", () => {
 // Stands in for gitleaks: "finds a leak" when the commits --log-opts names add
 // a line with KEY, as gitleaks' git scan reads `git log -p <log-opts>`. With no
 // --log-opts it scans every ref, like gitleaks after a full-history checkout.
+// --exit-code sets the leak exit status, as in gitleaks; a config error is
+// always 1 (STUB_EXIT=1 stands in for it).
 const SCANNER = `#!/bin/bash
-opts=--all
-for a in "$@"; do case "$a" in --log-opts=*) opts="\${a#--log-opts=}" ;; esac; done
+opts=--all; leak=1; prev=
+for a in "$@"; do
+  case "$a" in --log-opts=*) opts="\${a#--log-opts=}" ;; esac
+  [ "$prev" = --exit-code ] && leak=$a
+  prev=$a
+done
 echo "stub gitleaks log-opts: $opts"
 [ -n "$STUB_EXIT" ] && exit "$STUB_EXIT"
-if git log -p $opts | grep -q '^+.*FAKE-KEY'; then echo "leaks found: 1"; exit 1; fi
+if git log -p $opts | grep -q '^+.*FAKE-KEY'; then echo "leaks found: 1"; exit "$leak"; fi
 echo "no leaks found"
 `;
 
@@ -327,6 +333,7 @@ test("daily: a key on any branch fails and reports result=leaks", () => {
   const f = fixture();
   const r = daily(f);
   assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /found a key/);
   assert.match(r.out, /log-opts: --all/);
   assert.match(r.output, /^result=leaks$/m);
 });
@@ -353,6 +360,16 @@ test("daily: clean everywhere passes with result=clean", () => {
   assert.match(r.output, /^result=clean$/m);
 });
 
+// gitleaks exits 1 when it can't load .gitleaks.toml, the same code it uses
+// for leaks by default.
+test("daily: a gitleaks config error (exit 1) reports result=error, not a leak", () => {
+  const f = fixture();
+  const r = daily(f, { STUB_EXIT: "1" });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.output, /^result=error$/m);
+  assert.doesNotMatch(r.out, /found a key/);
+});
+
 test("daily: a gitleaks error reports result=error, not a leak", () => {
   const f = fixture();
   const r = daily(f, { STUB_EXIT: "2" });
@@ -367,17 +384,18 @@ test("daily: a gitleaks error reports result=error, not a leak", () => {
 const GH = `#!/bin/bash
 printf '%s\\n' "$*" >> "$STUB_LOG"
 case "$*" in
-  *"issues?state=open"*) [ -n "$STUB_EXISTING" ] && echo "$STUB_EXISTING"; exit 0 ;;
+  *"issues?state=open"*) [ -n "$STUB_LIST_FAIL" ] && { echo "HTTP 502" >&2; exit 1; }
+    [ -n "$STUB_EXISTING" ] && echo "$STUB_EXISTING"; exit 0 ;;
   *) echo "https://github.com/o/r/issues/9" ;;
 esac
 `;
 
-function alert({ existing = "", result }) {
+function alert({ existing = "", result, listFail = "" }) {
   const dir = mkdtempSync(join(tmpdir(), "gantry-alert-"));
   exe(dir, "gh", GH);
   const log = join(dir, "gh.log");
   const r = bash(stepScript(DAILY, "Open or update the alert issue"), {
-    dir, env: { STUB_LOG: log, STUB_EXISTING: existing, REPO: "o/r", RESULT: result, RUN_URL: "https://run/1" },
+    dir, env: { STUB_LOG: log, STUB_EXISTING: existing, STUB_LIST_FAIL: listFail, REPO: "o/r", RESULT: result, RUN_URL: "https://run/1" },
   });
   return { ...r, calls: readFileSync(log, "utf8") };
 }
@@ -395,6 +413,14 @@ test("alert: an open issue gets a comment, not a second issue", () => {
   const r = alert({ existing: "7", result: "leaks" });
   assert.equal(r.status, 0, r.out);
   assert.match(r.calls, /repos\/o\/r\/issues\/7\/comments -f body=/);
+  assert.doesNotMatch(r.calls, /-f title=/);
+});
+
+// Needs the step's `shell: bash` (pipefail): plain bash -e lets `| head`
+// hide the failed lookup.
+test("alert: a failed issue lookup fails the step and opens no issue", () => {
+  const r = alert({ result: "leaks", listFail: "1" });
+  assert.notEqual(r.status, 0, r.out);
   assert.doesNotMatch(r.calls, /-f title=/);
 });
 
