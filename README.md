@@ -87,7 +87,9 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   when app code changed.
 
 Every check skips itself when a repo doesn't have the relevant script or
-config, so it is safe to turn everything on everywhere.
+config, so it is safe to turn everything on everywhere. One exception: a repo
+with a `package.json` only in a subfolder fails the node job until you move
+the project to the root or set `node: false` (see below).
 
 ## Repos that aren't plain Node
 

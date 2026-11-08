@@ -186,3 +186,17 @@ test("contents API error still fails the gate", () => {
   assert.notEqual(r.status, 0);
   assert.match(r.log, /could not check for package.json/);
 });
+
+// The script tests above don't cover the wiring that turns ci-ok red: the gate
+// must export node_error, and the node job must run on it and fail first.
+test("ci.yml wires node_error from the gate to a failing first node step", () => {
+  const yml = readFileSync(CI, "utf8");
+  assert.match(yml, /^\s+node_error: \$\{\{ steps\.check\.outputs\.node_error \}\}$/m);
+  const node = yml.slice(yml.indexOf("\n  node:\n"), yml.indexOf("\n  ci-ok:\n"));
+  assert.match(node, /^\s+if: .*needs\.gate\.outputs\.run_node == 'true' \|\| needs\.gate\.outputs\.node_error != ''/m);
+  const first = node.slice(node.indexOf("steps:"), node.indexOf("- uses: actions/checkout"));
+  assert.match(first, /if: \$\{\{ needs\.gate\.outputs\.node_error != '' \}\}/);
+  assert.match(first, /NODE_ERROR: \$\{\{ needs\.gate\.outputs\.node_error \}\}/);
+  assert.match(first, /exit 1/);
+  assert.match(yml, /ci-ok:\n\s+needs: \[gate, secrets, node\]/);
+});
