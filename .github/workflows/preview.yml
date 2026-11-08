@@ -22,7 +22,7 @@ name: gantry-preview
 on:
   workflow_call:
     inputs:
-      platform:
+      platform-name:
         description: Where PR previews live. "railway" or "vercel". Set by gantry-init from detection.
         type: string
         required: true
@@ -91,7 +91,7 @@ jobs:
       - name: Check there is something to do
         id: gate
         env:
-          PLATFORM: ${{ inputs.platform }}
+          PLATFORM: ${{ inputs.platform-name }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
@@ -125,7 +125,7 @@ jobs:
       # Contract: output `url`; optional `sha`. Must itself wait until the
       # preview serves the PR head SHA, and fail with a one-line reason.
       - name: Find preview URL (railway)
-        if: steps.gate.outputs.run == 'true' && inputs.platform == 'railway'
+        if: steps.gate.outputs.run == 'true' && inputs.platform-name == 'railway'
         id: url-railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -139,7 +139,7 @@ jobs:
           node /tmp/preview-railway.mjs 2>&1 | tee /tmp/preview-adapter.log
           exit "${PIPESTATUS[0]}"
       - name: Find preview URL (vercel)
-        if: steps.gate.outputs.run == 'true' && inputs.platform == 'vercel'
+        if: steps.gate.outputs.run == 'true' && inputs.platform-name == 'vercel'
         id: url-vercel
         env:
           GITHUB_TOKEN: ${{ github.token }}
