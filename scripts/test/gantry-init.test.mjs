@@ -339,6 +339,14 @@ for (const vitest of [">=1.0.0 <2", "<2", "^1.0.0 || ~1.6.0", ">=1.6", "1.0.0 - 
     }));
 }
 
+test("stryker-plan reads package-lock.json before a stale node_modules", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", VITEST_STRYKER(">=1.6"));
+    put(dir, "package-lock.json", JSON.stringify({ packages: { "node_modules/vitest": { version: "2.1.0" } } }));
+    put(dir, "node_modules/vitest/package.json", JSON.stringify({ name: "vitest", version: "1.6.1" }));
+    assert.match(initWithNpm(dir, 0).stdout, /install .*vitest-runner/);
+  }));
+
 test("a range with vitest 1 in package-lock.json: mutation is off", () =>
   withRepo((dir) => {
     put(dir, "package.json", VITEST_STRYKER(">=1.6"));

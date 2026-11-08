@@ -13,8 +13,8 @@ if (!runner) off(/--test\b/.test(test) ? "node:test is too slow under Stryker" :
 // The vitest runner needs vitest 2+, and npm refuses the install on vitest 1 (#14).
 // A single-version spec (^1.6.0, ~1.2, 1.x) pins the major npm resolves to, and a
 // range whose every lower bound is 2+ (>=2, 2.x || 3.x) rules vitest 1 out, so the
-// spec decides. Any other range: the resolved version decides, from node_modules
-// or package-lock.json. With neither, go ahead; a failed install is not fatal.
+// spec decides. Any other range: the resolved version decides, from
+// package-lock.json (what npm will install) or node_modules. With neither, go ahead; a failed install is not fatal.
 if (runner === "vitest") {
   const declared = String(deps.vitest).trim().replace(/^(npm:vitest@|workspace:)/, "");
   const json = (f) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return undefined; } };
@@ -22,8 +22,8 @@ if (runner === "vitest") {
   const from2 = declared.split("||").every((alt) => /^\s*(>=|[\^~=v])*\s*v?([2-9]|[1-9]\d+)(\D|$)/i.test(alt));
   let found = declared, major = Number(single?.[1]);
   if (!single && !from2) {
-    found = json("node_modules/vitest/package.json")?.version
-      ?? json("package-lock.json")?.packages?.["node_modules/vitest"]?.version;
+    found = json("package-lock.json")?.packages?.["node_modules/vitest"]?.version
+      ?? json("node_modules/vitest/package.json")?.version;
     major = Number(String(found).match(/^v?(\d+)\./)?.[1]);
   }
   if (major < 2) off(`vitest <2: found ${found}, and the Stryker runner needs 2+`);
