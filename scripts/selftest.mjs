@@ -12,9 +12,9 @@
 // Exits 1 if any result differs. Needs `gh` signed in with Contents, Pull
 // requests and Workflows write plus Actions read on the sandbox (GH_TOKEN).
 //
-// Runs don't contaminate each other (gantry#36): ci.yml's gitleaks scans every
-// branch, so a key on one branch can turn other PRs red. The key scenario runs
-// last, after the other runs finish, and its branch is deleted straight after.
+// The key scenario runs last, after the other runs finish, and its branch is
+// deleted straight after. ci.yml scans only a PR's own commits (gantry#36), but
+// the sandbox's daily scan and the "holds no key" check see every branch.
 // Every branch sits under selftest/, and --cleanup removes leftovers from a
 // cancelled run. Callers must run one self-test at a time per sandbox.
 import { execFileSync } from "node:child_process";

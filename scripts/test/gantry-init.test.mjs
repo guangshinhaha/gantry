@@ -609,3 +609,14 @@ test("biome lint isn't evidence that biome formats", () =>
     init(dir, "--no-mutation");
     assert.equal(existsSync(join(dir, "biome.args")), false);
   }));
+
+test("adds the daily secret scan, and keeps an existing one", () =>
+  withRepo((dir) => {
+    const out = init(dir);
+    const daily = ".github/workflows/secrets-scan.yml";
+    assert.match(out, /add\s+\.github\/workflows\/secrets-scan\.yml/);
+    assert.equal(read(dir, daily), readFileSync(join(dirname(INIT), "../template", daily), "utf8"));
+    put(dir, daily, "# customised\n");
+    assert.match(init(dir), /keep\s+\.github\/workflows\/secrets-scan\.yml/);
+    assert.equal(read(dir, daily), "# customised\n");
+  }));

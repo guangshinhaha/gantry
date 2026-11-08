@@ -66,6 +66,9 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   below.
 - Optional: **Lighthouse scan** of the preview (scores and top failing
   audits in the same PR comment). See below.
+- The secret scan checks only the PR's own commits, so a key on another branch
+  or in old history can't turn an unrelated PR red. A push that isn't a merged
+  PR scans the pushed commits.
 - **Docs-only changes** (`docs/**`, `*.md`) always run the secret scan, because
   a key can be pasted into a doc. They skip the other checks above inside the
   job, so the status still reports instead of sitting on "pending".
@@ -79,6 +82,19 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   apps push to ECR. A registry push may come back later as an opt-in. Without
   a Dockerfile it skips and says so (`Skipped: no Dockerfile`) in the job
   summary.
+
+**Once a day** (GitHub Actions, `secrets-scan.yml`)
+- **Secret scan of every branch and all history.** It never blocks a PR. A leak
+  turns the run red and opens one issue titled `gantry: the daily secret scan failed`,
+  or comments on it if it's still open. It's an issue, not just the red run, because
+  GitHub emails a scheduled run's failure only to whoever last changed its cron
+  line, and turns schedules off after 60 days without activity in a public repo.
+  The issue reaches everyone watching the repo. Run it by hand from the Actions tab.
+- An existing repo adds it by copying
+  [`template/.github/workflows/secrets-scan.yml`](template/.github/workflows/secrets-scan.yml)
+  to `.github/workflows/secrets-scan.yml` (or re-running `gantry-init`, which
+  keeps every file that exists). The caller must grant `contents: read` and
+  `issues: write`.
 
 **Optional extras** for some stacks
 - `prisma`: blocks raw-SQL escape hatches (`$queryRawUnsafe`, `Prisma.raw()`);
@@ -344,6 +360,7 @@ and no others, with the repo's local binary. It adds:
 |---|---|
 | `lefthook.yml` | Local hooks. Points at this repo, so updates arrive automatically (re-fetched daily). |
 | `.github/workflows/ci.yml` | A few lines that call gantry's shared CI. |
+| `.github/workflows/secrets-scan.yml` | A few lines that call gantry's daily secret scan of every branch. |
 | `.github/workflows/mutation.yml` | A few lines that call gantry's mutation testing. |
 | `.github/workflows/preview.yml` | A few lines that call gantry's preview smoke tests. |
 | `.github/workflows/risky-paths.yml` | A few lines that call gantry's `needs-human` labelling. |
@@ -369,6 +386,8 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
                 secrets only; no package.json or `node: false` skips node,
                 a package.json only in a subfolder fails it),
                 secrets, node, then ci-ok (the one required check)
+  secrets-scan.yml  shared daily scan of every branch and all history; opens
+                an issue on a leak, never blocks a PR
   mutation.yml  shared mutation testing that repos call
   preview.yml   shared preview smoke tests. Platform-neutral; the only
                 platform-specific part is one "Find preview URL" step per platform.
@@ -403,7 +422,7 @@ a failing test and a made-up key planted in `docs/` (both must turn `gantry / ci
 and a docs-only change (must run the secret scan and skip node). It closes them
 and deletes their branches when done. To run it from your machine, signed in to
 `gh`: `node scripts/selftest.mjs --gantry-sha <pushed sha>`. Don't run two at
-once: a planted key turns the other run's scans red (#36).
+once: each run's cleanup removes every `selftest/` branch.
 
 To run CI on your own machine instead of GitHub's, pass
 `runs-on: '["self-hosted","gantry"]'` in a repo's `ci.yml`.
