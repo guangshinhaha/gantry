@@ -112,10 +112,20 @@ if [ "$MUTATION" = 1 ] && [ -f package.json ]; then
     case "$plan" in
       off:*) echo "  skip   mutation testing (${plan#off: })" ;;
       *)
-        # A failed install turns mutation off and never stops the rest (#14).
+        # A failed install, or one that leaves vitest <2 (pnpm only warns on the peer),
+        # turns mutation off: package.json and the lockfiles go back as they were,
+        # and the rest of gantry-init still runs (#14).
         echo "  install $plan"
         if [ -f pnpm-lock.yaml ]; then pm="pnpm add -D"; else pm="npm install -D"; fi
-        if $pm $plan >/dev/null; then
+        bak=$(mktemp -d)
+        for f in package.json package-lock.json pnpm-lock.yaml; do [ -f "$f" ] && cp "$f" "$bak/"; done
+        why=""
+        if ! out=$($pm $plan 2>&1); then why="the Stryker install failed"
+        elif case "$plan" in *vitest-runner*) true ;; *) false ;; esac &&
+          [ "$(node -p 'require("./node_modules/vitest/package.json").version.split(".")[0] < 2' 2>/dev/null)" = true ]; then
+          why="the installed vitest is <2, and the Stryker runner needs 2+"; out=""
+        fi
+        if [ -z "$why" ]; then
           copy "$GANTRY_DIR/template/.github/workflows/mutation.yml" .github/workflows/mutation.yml
           echo "  add    stryker.config.mjs"
           ADDED="$ADDED stryker.config.mjs"
@@ -123,9 +133,14 @@ if [ "$MUTATION" = 1 ] && [ -f package.json ]; then
             grep -qxF "$l" .gitignore 2>/dev/null || echo "$l" >> .gitignore
           done
         else
+          [ -n "$out" ] && echo "$out"
+          for f in package.json package-lock.json pnpm-lock.yaml; do
+            if [ -f "$bak/$f" ]; then cp "$bak/$f" "$f"; else rm -f "$f"; fi
+          done
           rm -f stryker.config.mjs
-          echo "  ! Stryker install failed (see above), so mutation testing is off. Fix it, then re-run gantry-init."
+          echo "  ! $why, so mutation testing is off and package.json is unchanged. Fix it, then re-run gantry-init."
         fi
+        rm -rf "$bak"
         ;;
     esac
   fi

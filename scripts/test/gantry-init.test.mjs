@@ -276,6 +276,43 @@ test("pnpm repo: a failed pnpm add warns and the rest still runs", () =>
     assert.equal(existsSync(join(dir, "stryker.config.mjs")), false);
   }));
 
+test("an install that leaves vitest 1 is rolled back, and the rest still runs", () =>
+  withRepo((dir) => {
+    const before = pkg({ scripts: { test: "vitest run" }, devDependencies: { vitest: "<2" } });
+    put(dir, "package.json", before);
+    // Like pnpm with lax peer deps: exits 0, writes the deps and resolves vitest 1.
+    put(dir, "stub-bin/npm", `#!/bin/sh
+mkdir -p node_modules/vitest
+echo '{"version":"1.6.1"}' > node_modules/vitest/package.json
+echo '{"changed":true}' > package.json
+echo '{}' > package-lock.json
+`);
+    chmodSync(join(dir, "stub-bin/npm"), 0o755);
+    const env = { ...process.env, PATH: `${join(dir, "stub-bin")}:${process.env.PATH}` };
+    const run = spawnSync(INIT, [dir, "--review"], { encoding: "utf8", env });
+    assert.equal(run.status, 0);
+    assert.match(run.stdout, /! the installed vitest is <2.*mutation testing is off/);
+    assert.equal(read(dir, "package.json"), before);
+    assert.equal(existsSync(join(dir, "package-lock.json")), false, "a lockfile the install created is removed");
+    assert.equal(existsSync(join(dir, "stryker.config.mjs")), false);
+    assert.equal(existsSync(join(dir, ".github/workflows/mutation.yml")), false);
+    assert.ok(existsSync(join(dir, ".github/workflows/review.yml")));
+  }));
+
+test("a failed install puts package.json and the lockfile back and shows the installer's output", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", VITEST_OXFMT);
+    put(dir, "package-lock.json", "{\"lock\":1}");
+    put(dir, "stub-bin/npm", "#!/bin/sh\necho half > package.json\necho half > package-lock.json\necho ERR_ON_STDOUT\nexit 1\n");
+    chmodSync(join(dir, "stub-bin/npm"), 0o755);
+    const env = { ...process.env, PATH: `${join(dir, "stub-bin")}:${process.env.PATH}` };
+    const run = spawnSync(INIT, [dir], { encoding: "utf8", env });
+    assert.equal(run.status, 0);
+    assert.match(run.stdout, /ERR_ON_STDOUT/);
+    assert.equal(read(dir, "package.json"), VITEST_OXFMT);
+    assert.equal(read(dir, "package-lock.json"), "{\"lock\":1}");
+  }));
+
 const VITEST_STRYKER = (vitest) => pkg({ scripts: { test: "vitest run" }, devDependencies: { vitest } });
 const offRun = (dir) => {
   const run = initWithNpm(dir, 7, "--review");
