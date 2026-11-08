@@ -407,6 +407,9 @@ once: a planted key turns the other run's scans red (#36).
 
 To run CI on your own machine instead of GitHub's, pass
 `runs-on: '["self-hosted","gantry"]'` in a repo's `ci.yml`.
+The secret scan downloads gitleaks for Linux and macOS on x64 or arm64. On any
+other runner it fails with "unsupported platform" unless gitleaks is already on
+the runner's PATH, which it then uses.
 
 ## Next
 
