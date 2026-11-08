@@ -76,7 +76,7 @@ function runGate({ root, tree = [], truncated = false, treeFails = false, treeBo
         GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary,
         REPO: "o/r", EVENT: "pull_request", PR: "1", SHA: "abc", BEFORE: "",
         NODE_INPUT: node, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
-        RUNNER_TEMP: dir, GITHUB_SERVER_URL: "https://github.com", GH_TOKEN: "t",
+        LANG: "C.UTF-8", RUNNER_TEMP: dir, GITHUB_SERVER_URL: "https://github.com", GH_TOKEN: "t",
       },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
     });
@@ -129,6 +129,12 @@ test("a name with a newline before package.json doesn't count", () => {
   assert.equal(r.outputs.run_node, "false");
 });
 
+test("a name with a newline after package.json doesn't count", () => {
+  const r = runGate({ root: 404, tree: ["notes/package.json\n"] });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.node_error ?? "", "");
+});
+
 test("a file that only ends in package.json doesn't count", () => {
   const r = runGate({ root: 404, tree: ["notpackage.json", "docs/my-package.json"] });
   assert.equal(r.outputs.run_node, "false");
@@ -144,6 +150,7 @@ for (const [name, paths, expect] of [
   ["fetch fails: gate fails", null, "gate"],
   ["a name with a newline doesn't count", '"notes\\npackage.json"', "skip"],
   ["a quoted nested name still counts", '"w\\303\\251b \\"x\\"/package.json"', "fail-quoted"],
+  ["a non-UTF-8 nested name still counts", '"caf\\351/package.json"', "fail-quoted"],
 ]) {
   test(`truncated tree, ${name}`, () => {
     const r = runGate({ root: 404, tree: ["a.md"], truncated: true, gitPaths: paths });
