@@ -11,17 +11,18 @@ const test = pkg.scripts?.test ?? "";
 const runner = deps.vitest ? "vitest" : deps.jest ? "jest" : null;
 if (!runner) off(/--test\b/.test(test) ? "node:test is too slow under Stryker" : "no Vitest or Jest tests");
 // The vitest runner needs vitest 2+, and npm refuses the install on vitest 1 (#14).
-// A declared range that names a version decides, since npm resolves from it; the
-// installed version counts only when it names none (*, latest, workspace:*).
+// A single-version spec (^1.6.0, ~1.2, 1.x) pins the major npm resolves to, so it
+// decides. Any other range: the resolved version decides, from node_modules or
+// package-lock.json. With neither, go ahead; a failed install is not fatal.
 if (runner === "vitest") {
-  let version = String(deps.vitest).replace(/^(npm:vitest@|workspace:)/, "");
-  if (!/\d/.test(version)) {
-    try { version = JSON.parse(readFileSync("node_modules/vitest/package.json", "utf8")).version; } catch {}
-  }
-  // A hyphen range "a - b" is below 2 only if b is; else the lowest version or an upper bound decides.
-  const below2 = (alt) => alt.includes(" - ") ? /^\s*[\^~=v]*\s*[01](\D|$)/.test(alt.split(" - ")[1])
-    : /^\s*[\^~=v]*\s*[01](\D|$)/.test(alt) || /<\s*2(\.0)*(-\S*)?(\s|$)|<=\s*1(\D|$)/.test(alt);
-  if (/\d/.test(version) && version.split("||").every(below2)) off(`vitest <2: found ${version}, and the Stryker runner needs 2+`);
+  const declared = String(deps.vitest);
+  const json = (f) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return undefined; } };
+  const resolved = json("node_modules/vitest/package.json")?.version
+    ?? json("package-lock.json")?.packages?.["node_modules/vitest"]?.version;
+  const single = declared.match(/^(?:npm:vitest@|workspace:)?[\^~=v]?\s*(\d+)(\.[\dx*]+){0,2}(-[\w.]+)?$/);
+  const found = single ? declared : resolved;
+  const major = Number((single?.[1]) ?? String(resolved).match(/^v?(\d+)\./)?.[1]);
+  if (major < 2) off(`vitest <2: found ${found}, and the Stryker runner needs 2+`);
 }
 
 const cfg = test.match(/--config[= ](\S+)/)?.[1];
