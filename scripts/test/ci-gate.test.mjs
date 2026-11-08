@@ -50,7 +50,7 @@ const GIT = `#!/bin/bash
 case "$*" in
   *" init "*|init*) mkdir -p "\${@: -1}" ;;
   *" fetch "*) [ "$STUB_GIT_PATHS" = fail ] && { echo "fatal: stub" >&2; exit 128; }; exit 0 ;;
-  *" ls-tree "*) printf '%s\\n' "$STUB_GIT_PATHS" | tr '\\n' '\\0' ;;
+  *" ls-tree "*) printf '%s\\n' "$STUB_GIT_PATHS" ;;
   *) echo "stub git: unexpected $*" >&2; exit 2 ;;
 esac
 `;
@@ -122,6 +122,13 @@ test("nested package.json only: node is set to fail with a message naming node: 
   assert.match(r.outputs.node_error, /root/);
 });
 
+test("a name with a newline before package.json doesn't count", () => {
+  const r = runGate({ root: 404, tree: ["notes\npackage.json"] });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.node_error ?? "", "");
+  assert.equal(r.outputs.run_node, "false");
+});
+
 test("a file that only ends in package.json doesn't count", () => {
   const r = runGate({ root: 404, tree: ["notpackage.json", "docs/my-package.json"] });
   assert.equal(r.outputs.run_node, "false");
@@ -129,11 +136,14 @@ test("a file that only ends in package.json doesn't count", () => {
 });
 
 // A truncated tree falls back to a blobless shallow fetch, stubbed here: `git
-// ls-tree` prints STUB_GIT_PATHS (newline-separated), or the fetch fails.
+// ls-tree` prints STUB_GIT_PATHS as git would (one per line, odd names
+// quoted and escaped), or the fetch fails.
 for (const [name, paths, expect] of [
   ["no package.json anywhere: skips, as before", "a.md\nsrc/x.go", "skip"],
   ["nested package.json: node fails", "a.md\nweb/package.json", "fail"],
   ["fetch fails: gate fails", null, "gate"],
+  ["a name with a newline doesn't count", '"notes\\npackage.json"', "skip"],
+  ["a quoted nested name still counts", '"w\\303\\251b \\"x\\"/package.json"', "fail-quoted"],
 ]) {
   test(`truncated tree, ${name}`, () => {
     const r = runGate({ root: 404, tree: ["a.md"], truncated: true, gitPaths: paths });
@@ -145,7 +155,8 @@ for (const [name, paths, expect] of [
     assert.equal(r.status, 0, r.log);
     assert.equal(r.outputs.run_node, "false");
     if (expect === "skip") assert.equal(r.outputs.node_error ?? "", "");
-    else assert.match(r.outputs.node_error, /web\/package\.json.*node: false/);
+    else if (expect === "fail") assert.match(r.outputs.node_error, /web\/package\.json.*node: false/);
+    else assert.match(r.outputs.node_error, /package\.json".*node: false/);
   });
 }
 

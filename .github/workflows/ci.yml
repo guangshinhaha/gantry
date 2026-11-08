@@ -110,14 +110,17 @@ jobs:
                 if ! { git init -q "$dir" \
                   && git -C "$dir" fetch -q --depth 1 --filter=blob:none \
                     "https://x-access-token:$GH_TOKEN@${GITHUB_SERVER_URL#https://}/$REPO" "$SHA" \
-                  && git -C "$dir" ls-tree -r -z --name-only FETCH_HEAD > "$dir.paths"; }; then
+                  && git -C "$dir" -c core.quotePath=false ls-tree -r --name-only FETCH_HEAD > "$dir.paths"; }; then
                   echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
                 fi
-                paths=$(tr '\0' '\n' < "$dir.paths")
+                # git wraps a name with a quote or newline in quotes and escapes
+                # it, so a newline can't fake a match.
+                found=$(grep -E '(^"?|/)package\.json"?$' "$dir.paths" || true)
               else
-                paths=$(printf '%s' "$tree" | jq -r '.tree[] | select(.type == "blob") | .path')
+                found=$(printf '%s' "$tree" \
+                  | jq -r '.tree[] | select(.type == "blob") | .path | select(test("(^|/)package\\.json$"))')
               fi
-              nested=$(printf '%s\n' "$paths" | grep -E '(^|/)package\.json$' | head -n 5 | paste -sd ' ' -)
+              nested=$(printf '%s\n' "$found" | head -n 5 | paste -sd ' ' -)
               if [ -n "$nested" ]; then
                 node_error="package.json is not at the repo root but was found at: $nested. gantry's node job only runs at the repo root. Move the project to the root, or set \`node: false\` and run its checks in your own workflow."
               fi
