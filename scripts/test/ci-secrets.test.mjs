@@ -230,6 +230,33 @@ test("PR: a key in the PR's own commit fails the scan", () => {
   assert.match(r.out, /leaks found/);
 });
 
+test("PR: a branch that merged its base back in scans its own commits, not the base's", () => {
+  const f = fixture();
+  // PR branched from init, so main's old key and later commits arrive only
+  // through the merge of main into the PR branch.
+  git(f.repo, "checkout", "-q", "-b", "pr", f.init);
+  const own = commit(f.repo, "docs.md", "api_key = FAKE-KEY-pr\n", "pr key, before merging main");
+  git(f.repo, "merge", "-q", "--no-edit", "main");
+  const head = git(f.repo, "rev-parse", "HEAD");
+  git(f.repo, "checkout", "-q", "--detach", f.main);
+  git(f.repo, "merge", "-q", "--no-ff", "-m", "merge", head);
+  const sha = git(f.repo, "rev-parse", "HEAD");
+  const red = scan(f, { EVENT: "pull_request", PR_BASE: f.init, PR_HEAD: head, SHA: sha });
+  assert.equal(red.status, 1, red.out);
+  assert.match(git(f.repo, "rev-list", `${f.main}..${head}`), new RegExp(own));
+  // Same shape without the PR's key: main's old key, now in the PR branch's
+  // history through the merge, must not turn it red.
+  const g = fixture();
+  git(g.repo, "checkout", "-q", "-b", "pr", g.init);
+  commit(g.repo, "docs.md", "clean\n", "pr change");
+  git(g.repo, "merge", "-q", "--no-edit", "main");
+  const h2 = git(g.repo, "rev-parse", "HEAD");
+  git(g.repo, "checkout", "-q", "--detach", g.main);
+  git(g.repo, "merge", "-q", "--no-ff", "-m", "merge", h2);
+  const green = scan(g, { EVENT: "pull_request", PR_BASE: g.init, PR_HEAD: h2, SHA: git(g.repo, "rev-parse", "HEAD") });
+  assert.equal(green.status, 0, green.out);
+});
+
 test("PR: a stale base.sha doesn't widen the range into base history", () => {
   const f = fixture();
   const pr = prCheckout(f, "just docs\n");
