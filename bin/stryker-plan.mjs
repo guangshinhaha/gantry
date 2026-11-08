@@ -11,12 +11,15 @@ const test = pkg.scripts?.test ?? "";
 const runner = deps.vitest ? "vitest" : deps.jest ? "jest" : null;
 if (!runner) off(/--test\b/.test(test) ? "node:test is too slow under Stryker" : "no Vitest or Jest tests");
 // The vitest runner needs vitest 2+, and npm refuses the install on vitest 1 (#14).
-// The installed version decides; else the lowest major the declared range allows.
+// A declared range that names a version decides, since npm resolves from it; the
+// installed version counts only when it names none (*, latest, workspace:*).
 if (runner === "vitest") {
-  let version = deps.vitest;
-  try { version = JSON.parse(readFileSync("node_modules/vitest/package.json", "utf8")).version; } catch {}
-  const major = Number(String(version).match(/^[\s^~>=v]*(\d+)/)?.[1]);
-  if (major < 2) off(`vitest <2: found ${version}, and the Stryker runner needs 2+`);
+  let version = String(deps.vitest).replace(/^npm:vitest@/, "");
+  if (!/\d/.test(version)) {
+    try { version = JSON.parse(readFileSync("node_modules/vitest/package.json", "utf8")).version; } catch {}
+  }
+  const below2 = (alt) => /^\s*[\^~=v]*\s*[01](\D|$)/.test(alt) || /<\s*2(\.0)*(\s|$)|<=\s*1(\D|$)/.test(alt);
+  if (/\d/.test(version) && version.split("||").every(below2)) off(`vitest <2: found ${version}, and the Stryker runner needs 2+`);
 }
 
 const cfg = test.match(/--config[= ](\S+)/)?.[1];

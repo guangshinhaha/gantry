@@ -263,7 +263,7 @@ test("a failed install warns, adds no mutation files, and the rest still runs", 
   }));
 
 const VITEST_STRYKER = (vitest) => pkg({ scripts: { test: "vitest run" }, devDependencies: { vitest } });
-for (const vitest of ["1.6.0", "^1.6.0", "~1.2.0", "1.x", ">=1.0.0 <2"]) {
+for (const vitest of ["1.6.0", "^1.6.0", "~1.2.0", "1.x", ">=1.0.0 <2", "<2", "npm:vitest@1.6.0", "0.34.6", "^1.0.0 || ~1.6.0"]) {
   test(`vitest ${vitest} in package.json: mutation is off, no install, the rest still runs`, () =>
     withRepo((dir) => {
       put(dir, "package.json", VITEST_STRYKER(vitest));
@@ -276,14 +276,21 @@ for (const vitest of ["1.6.0", "^1.6.0", "~1.2.0", "1.x", ">=1.0.0 <2"]) {
     }));
 }
 
-test("the installed vitest decides over the declared range", () =>
+test("a declared range with no version: the installed vitest decides", () =>
   withRepo((dir) => {
     put(dir, "package.json", VITEST_STRYKER("*"));
     put(dir, "node_modules/vitest/package.json", JSON.stringify({ name: "vitest", version: "1.6.1" }));
     assert.match(initWithNpm(dir, 0).stdout, /skip\s+mutation testing \(vitest <2/);
   }));
 
-for (const vitest of ["^2.1.0", "3.2.4", "latest"]) {
+test("a declared vitest 2 range decides over a stale installed vitest 1", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", VITEST_STRYKER("^2.1.0"));
+    put(dir, "node_modules/vitest/package.json", JSON.stringify({ name: "vitest", version: "1.6.1" }));
+    assert.match(initWithNpm(dir, 0).stdout, /install .*vitest-runner/);
+  }));
+
+for (const vitest of ["^2.1.0", "3.2.4", "latest", ">=1.6", "^1.6.0 || ^2.0.0", "10.0.0"]) {
   test(`vitest ${vitest}: mutation is set up`, () =>
     withRepo((dir) => {
       put(dir, "package.json", VITEST_STRYKER(vitest));
