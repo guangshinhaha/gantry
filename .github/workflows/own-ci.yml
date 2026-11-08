@@ -51,8 +51,6 @@ jobs:
       # there breaks every repo whose template/ caller still passes it.
       - name: Template caller inputs
         if: ${{ !cancelled() }}
-        env:
-          SHELLCHECK_OPTS: --severity=warning
         run: sh scripts/lint-template-calls.sh
 
       # lefthook reads hooks/*.yml from gantry@main in every repo, and

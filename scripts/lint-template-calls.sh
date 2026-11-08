@@ -33,6 +33,8 @@ for f in "$root"/template/.github/workflows/*.yml "$root"/template/.github/workf
 done
 
 cd "$tmp"
+# Same severity as the actionlint step in own-ci.yml: info-level notes pass.
+export SHELLCHECK_OPTS="${SHELLCHECK_OPTS:---severity=warning}"
 out=$(actionlint -format '{{range $}}::error file={{.Filepath}},line={{.Line}},col={{.Column}}::{{.Message}}\n{{end}}' \
   .github/workflows/caller-*) || status=$?
 [ -z "$out" ] || printf '%s\n' "$out" | sed 's#file=\.github/workflows/caller-#file=template/.github/workflows/#'
