@@ -35,7 +35,7 @@ jobs:
   # Decides which real jobs run. A push to main that is a merged PR skips them
   # all, because its CI already ran on the pull_request event. A change that only
   # touches docs skips everything except the secret scan, because a key can be
-  # pasted into a doc. "Only docs" means *.md and non-code files under docs/,
+  # pasted into a doc. "Only docs" means *.md and docs or images under docs/,
   # counting both names of a rename, and never a file list the API may have cut
   # off (gantry#59, #60, #61, #62). The node job also skips when the caller sets `node: false`
   # or the repo has no package.json, and the reason goes in this job's summary.
@@ -105,13 +105,14 @@ jobs:
                 echo "Compare lists $listed files, the API's cap, so this is not treated as docs-only."
               fi
             fi
-            # Docs-only = at least one file, and every file is a *.md or sits
-            # under docs/ and isn't a code file. Code under docs/ counts as code
-            # (gantry#60): a prompt or sample there may be imported or run. A
-            # *.md still counts as docs wherever it sits.
-            code='\.(ts|tsx|js|jsx|mjs|cjs|mts|cts|json|jsonc|json5|ya?ml|toml|sh|bash|zsh|py|rb|go|rs|java|kt|swift|c|h|cc|cpp|cs|php|sql|prisma|graphql|gql|css|scss|sass|less|html?|vue|svelte|astro)$|(^|/)(Dockerfile|Makefile)$'
+            # Docs-only = at least one file, and every file is a *.md or a doc
+            # or image under docs/. Anything else under docs/ counts as code
+            # (gantry#60): a script, template or sample there may be imported
+            # or run, and a list of code types always misses some. A *.md still
+            # counts as docs wherever it sits.
+            docfile='\.(png|jpe?g|gif|webp|svg|ico|pdf|txt|rst|adoc|markdown)$'
             other=$({ printf '%s\n' "$files" | grep -vE '^docs/|\.md$'
-                      printf '%s\n' "$files" | grep -E '^docs/' | grep -vE '\.md$' | grep -iE "$code"
+                      printf '%s\n' "$files" | grep -E '^docs/' | grep -vE '\.md$' | grep -vE "$docfile"
                     } || true)
             if [ "$complete" = true ] && [ -n "$files" ] && [ -z "$other" ]; then
               docs_only=true; echo "Docs-only change, running only the secret scan."
@@ -157,7 +158,9 @@ jobs:
                   | jq -r '.tree[] | select(.type == "blob") | .path | select(. == "package.json" or endswith("/package.json"))')
               fi
               nested=$(printf '%s\n' "$found" | head -n 5 | paste -sd ' ' -)
-              if printf '%s\n' "$files" | grep -qx 'package.json'; then
+              # Asks jq, not the flattened list, so a name with a newline in it
+              # can't fake a line.
+              if [ -n "$(printf '%s\n' "$entries" | jq -r 'select(.f == "package.json" or .p == "package.json") | "y"')" ]; then
                 # The file list names the root package.json, and the head has
                 # none, so this change removed it or renamed it away. That
                 # isn't a repo that never had one (gantry#59).
