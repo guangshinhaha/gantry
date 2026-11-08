@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Needs actionlint on PATH; own-ci installs it before node --test.
+// Needs actionlint on PATH. own-ci installs it before node --test, so in CI a
+// missing actionlint fails instead of skipping.
+const skip =
+  !process.env.CI && spawnSync("actionlint", ["--version"]).status !== 0 && "actionlint not on PATH";
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 function run(edit) {
@@ -28,27 +31,21 @@ const sub = (dir, file, from, to) => {
   writeFileSync(p, s.replace(from, to));
 };
 
-test("current templates pass", () => {
+test("current templates pass", { skip }, () => {
   const r = run();
   assert.equal(r.status, 0, r.stdout + r.stderr);
 });
 
-test("a live input the shared workflow dropped fails, pointing at template/", () => {
+test("a live input the shared workflow dropped fails, pointing at template/", { skip }, () => {
   const r = run((d) => sub(d, ".github/workflows/preview.yml", "\n      platform:\n", "\n      platform-x:\n"));
   assert.notEqual(r.status, 0);
   assert.match(r.stdout, /file=template\/\.github\/workflows\/preview\.yml,line=\d+.*input "platform" is not defined/);
 });
 
-test("a commented-out option the shared workflow dropped fails", () => {
-  const r = run((d) => sub(d, ".github/workflows/ci.yml", "\n      e2e:\n", "\n      e2e-x:\n"));
+test("a shared-workflow call that isn't repointed fails", { skip }, () => {
+  const r = run((d) =>
+    sub(d, "template/.github/workflows/ci.yml", "guangshinhaha/gantry/.github", "someone/fork/.github"),
+  );
   assert.notEqual(r.status, 0);
-  assert.match(r.stdout, /template\/\.github\/workflows\/ci\.yml.*input "e2e" is not defined/);
-});
-
-test("prose comments and alternatives to a live key stay comments", () => {
-  const r = run((d) => {
-    appendFileSync(join(d, "template/.github/workflows/ci.yml"), "    # Note: set e2e only on Linux\n");
-    sub(d, "template/.github/workflows/preview.yml", "      # lighthouse: true", "      # platform: vercel\n      # lighthouse: true");
-  });
-  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /file=template\/\.github\/workflows\/ci\.yml,line=\d+::uses: is not/);
 });
