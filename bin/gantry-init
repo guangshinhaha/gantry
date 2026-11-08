@@ -118,7 +118,7 @@ if [ "$MUTATION" = 1 ] && [ -f package.json ]; then
         echo "  install $plan"
         if [ -f pnpm-lock.yaml ]; then pm="pnpm add -D"; else pm="npm install -D"; fi
         bak=$(mktemp -d)
-        for f in package.json package-lock.json pnpm-lock.yaml; do [ -f "$f" ] && cp "$f" "$bak/"; done
+        for f in package.json package-lock.json npm-shrinkwrap.json pnpm-lock.yaml; do [ -f "$f" ] && cp "$f" "$bak/"; done
         why=""
         if ! out=$($pm $plan 2>&1); then why="the Stryker install failed"
         elif case "$plan" in *vitest-runner*) true ;; *) false ;; esac &&
@@ -134,7 +134,7 @@ if [ "$MUTATION" = 1 ] && [ -f package.json ]; then
           done
         else
           [ -n "$out" ] && echo "$out"
-          for f in package.json package-lock.json pnpm-lock.yaml; do
+          for f in package.json package-lock.json npm-shrinkwrap.json pnpm-lock.yaml; do
             if [ -f "$bak/$f" ]; then cp "$bak/$f" "$f"; else rm -f "$f"; fi
           done
           rm -f stryker.config.mjs

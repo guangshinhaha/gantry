@@ -351,7 +351,14 @@ for (const vitest of ["^2.1.0", ">=2.0.0", ">=2", "2.x || 3.x", "^v2"]) {
     withRepo((dir) => {
       put(dir, "package.json", VITEST_STRYKER(vitest));
       put(dir, "node_modules/vitest/package.json", JSON.stringify({ name: "vitest", version: "1.6.1" }));
-      assert.match(initWithNpm(dir, 0).stdout, /install .*vitest-runner/);
+      // Like real npm: the install brings node_modules in line with the declared range.
+      put(dir, "stub-bin/npm", `#!/bin/sh\necho '{"version":"2.1.0"}' > node_modules/vitest/package.json\n`);
+      chmodSync(join(dir, "stub-bin/npm"), 0o755);
+      const env = { ...process.env, PATH: `${join(dir, "stub-bin")}:${process.env.PATH}` };
+      const run = spawnSync(INIT, [dir], { encoding: "utf8", env });
+      assert.match(run.stdout, /install .*vitest-runner/);
+      assert.ok(existsSync(join(dir, ".github/workflows/mutation.yml")));
+      assert.ok(existsSync(join(dir, "stryker.config.mjs")));
     }));
 }
 
