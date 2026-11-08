@@ -152,8 +152,10 @@ jobs:
       # against a pinned sha256 (gantry#67). A gitleaks already on PATH is used
       # instead, and the log says so: a self-hosted runner may install its own,
       # and that's the only way to scan on a platform with no build here. Any
-      # other platform fails with "unsupported platform", never a leak.
+      # other platform fails with "unsupported platform", never a leak. bash, not
+      # the default pwsh on Windows, so a Windows runner reaches that message.
       - name: gitleaks
+        shell: bash
         run: |
           if command -v gitleaks >/dev/null; then
             echo "::notice::Using gitleaks already on PATH ($(command -v gitleaks), $(gitleaks version 2>/dev/null || echo 'version unknown')) instead of downloading v8.30.1"

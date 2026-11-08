@@ -95,3 +95,11 @@ test("a gitleaks already on PATH is used, and the log says so", () => {
   assert.match(r.out, /stub gitleaks detect --redact --verbose/);
   assert.equal(r.urls, "");
 });
+
+// Without `shell: bash`, a Windows runner runs the step in pwsh, which fails on
+// the bash syntax before it can say "unsupported platform".
+test("the gitleaks step runs in bash on every OS", () => {
+  const yml = readFileSync(CI, "utf8");
+  const step = yml.slice(yml.indexOf("- name: gitleaks"), yml.indexOf("run: |", yml.indexOf("- name: gitleaks")));
+  assert.match(step, /^\s+shell: bash\s*$/m);
+});
