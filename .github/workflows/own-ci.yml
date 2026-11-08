@@ -34,8 +34,8 @@ jobs:
           tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" actionlint
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      # Lints the template workflows too, because gantry-init copies them into
-      # other repos. shellcheck's info-level style notes don't fail the check:
+      # Template workflows are linted in "Template caller inputs" below.
+      # shellcheck's info-level style notes don't fail the check:
       # mutation.yml has two already, and they aren't breakage. actionlint skips
       # shellcheck silently if it's missing, so fail here instead.
       - name: actionlint
@@ -44,12 +44,15 @@ jobs:
         run: |
           shellcheck --version
           shopt -s nullglob
-          actionlint .github/workflows/*.{yml,yaml} template/.github/workflows/*.{yml,yaml}
+          actionlint .github/workflows/*.{yml,yaml}
 
+      # Lints the template workflows, which gantry-init copies into other repos.
       # Repos call the shared workflows at @main, so an input dropped or renamed
       # there breaks every repo whose template/ caller still passes it.
       - name: Template caller inputs
         if: ${{ !cancelled() }}
+        env:
+          SHELLCHECK_OPTS: --severity=warning
         run: sh scripts/lint-template-calls.sh
 
       # lefthook reads hooks/*.yml from gantry@main in every repo, and
@@ -58,9 +61,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           yq --version
+          fail=0
           for f in hooks/*.yml template/lefthook.yml; do
-            yq '.' "$f" > /dev/null || { echo "::error file=$f::invalid YAML"; exit 1; }
+            yq '.' "$f" > /dev/null || { echo "::error file=$f::invalid YAML"; fail=1; }
           done
+          exit "$fail"
 
       # Runs even when an earlier check fails, so one push shows every result.
       # node --test alone misses a syntax error in code the tests don't reach:
