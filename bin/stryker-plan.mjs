@@ -15,11 +15,11 @@ if (!runner) off(/--test\b/.test(test) ? "node:test is too slow under Stryker" :
 // decides. Any other range: the resolved version decides, from node_modules or
 // package-lock.json. With neither, go ahead; a failed install is not fatal.
 if (runner === "vitest") {
-  const declared = String(deps.vitest);
+  const declared = String(deps.vitest).trim();
   const json = (f) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return undefined; } };
   const resolved = json("node_modules/vitest/package.json")?.version
     ?? json("package-lock.json")?.packages?.["node_modules/vitest"]?.version;
-  const single = declared.match(/^(?:npm:vitest@|workspace:)?[\^~=v]?\s*(\d+)(\.[\dx*]+){0,2}(-[\w.]+)?$/);
+  const single = declared.match(/^(?:npm:vitest@|workspace:)?[\^~=v]?\s*(\d+)(\.[\dx*]+){0,2}(-[\w.]+)?$/i);
   const found = single ? declared : resolved;
   const major = Number((single?.[1]) ?? String(resolved).match(/^v?(\d+)\./)?.[1]);
   if (major < 2) off(`vitest <2: found ${found}, and the Stryker runner needs 2+`);

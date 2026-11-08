@@ -285,7 +285,7 @@ const offRun = (dir) => {
   assert.equal(existsSync(join(dir, "stryker.config.mjs")), false);
   assert.equal(existsSync(join(dir, ".github/workflows/mutation.yml")), false);
 };
-for (const vitest of ["1.6.0", "^1.6.0", "~1.2.0", "1.x", "1", "npm:vitest@1.6.0", "workspace:^1.6.0", "0.34.6", "^1.0.0-beta.1"]) {
+for (const vitest of ["1.6.0", "^1.6.0", "~1.2.0", "1.x", "1", "npm:vitest@1.6.0", "workspace:^1.6.0", "0.34.6", "^1.0.0-beta.1", "1.X", " ^1.6.0 "]) {
   test(`vitest ${vitest} in package.json: mutation is off, no install, the rest still runs`, () =>
     withRepo((dir) => {
       put(dir, "package.json", VITEST_STRYKER(vitest));
