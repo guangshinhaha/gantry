@@ -63,6 +63,7 @@ trap format_added EXIT
 echo "gantry → $(pwd)"
 copy "$GANTRY_DIR/template/lefthook.yml" lefthook.yml
 copy "$GANTRY_DIR/template/.github/workflows/ci.yml" .github/workflows/ci.yml
+copy "$GANTRY_DIR/template/.github/workflows/secrets-scan.yml" .github/workflows/secrets-scan.yml
 
 # Preview smoke tests: only when we know the platform (detected or --preview).
 if [ -z "$PREVIEW" ]; then
