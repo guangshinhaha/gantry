@@ -35,7 +35,9 @@ jobs:
   # Decides which real jobs run. A push to main that is a merged PR skips them
   # all, because its CI already ran on the pull_request event. A change that only
   # touches docs skips everything except the secret scan, because a key can be
-  # pasted into a doc. The node job also skips when the caller sets `node: false`
+  # pasted into a doc. "Only docs" means *.md and non-code files under docs/,
+  # counting both names of a rename, and never a file list the API may have cut
+  # off (gantry#59, #60, #61, #62). The node job also skips when the caller sets `node: false`
   # or the repo has no package.json, and the reason goes in this job's summary.
   # A package.json only in a subfolder fails the node job instead (gantry#66).
   # Skipping happens here, not via workflow-level paths-ignore: a required check
@@ -70,14 +72,44 @@ jobs:
             if [ "$merged" -gt 0 ]; then merged_pr=true; echo "Already tested in its PR."; fi
           fi
           if [ "$merged_pr" = false ]; then
+            # `files` ends up with every path the change touches, or stays empty
+            # when the list can't be trusted to be complete, which means "not
+            # docs-only". A rename lists both names: one JSON line per file
+            # carries filename and previous_filename, and the line count is the
+            # file count.
             files=""
             if [ "$EVENT" = pull_request ]; then
-              files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+              entries=$(gh api --paginate "repos/$REPO/pulls/$PR/files" \
+                --jq '.[] | {f: .filename, p: .previous_filename} | @json')
+              changed=$(gh api "repos/$REPO/pulls/$PR" --jq .changed_files)
+              listed=$(printf '%s\n' "$entries" | grep -c . || true)
+              # The files API stops at 3000, so a shorter list than the PR's
+              # changed_files hides the rest (gantry#61).
+              if [[ "$changed" =~ ^[0-9]+$ ]] && [ "$listed" -ge "$changed" ]; then
+                files=$(printf '%s\n' "$entries" | jq -r '.f, (.p // empty)')
+              else
+                echo "Changed-file list is incomplete ($listed of ${changed:-unknown}), so this is not treated as docs-only."
+              fi
             elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
-              files=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" --jq '.files[].filename') || files=""
+              entries=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" \
+                --jq '.files[] | {f: .filename, p: .previous_filename} | @json') || entries=""
+              listed=$(printf '%s\n' "$entries" | grep -c . || true)
+              # The compare API lists at most 300 files and has no next page, so
+              # a full list may be cut off (gantry#62).
+              if [ "$listed" -lt 300 ]; then
+                files=$(printf '%s\n' "$entries" | jq -r '.f, (.p // empty)')
+              else
+                echo "Compare lists $listed files, the API's cap, so this is not treated as docs-only."
+              fi
             fi
-            # Docs-only = at least one file and every file is docs/** or *.md.
-            other=$(printf '%s\n' "$files" | grep -vE '^docs/|\.md$' || true)
+            # Docs-only = at least one file, and every file is a *.md or sits
+            # under docs/ and isn't a code file. Code under docs/ counts as code
+            # (gantry#60): a prompt or sample there may be imported or run. A
+            # *.md still counts as docs wherever it sits.
+            code='\.(ts|tsx|js|jsx|mjs|cjs|mts|cts|json|jsonc|json5|ya?ml|toml|sh|bash|zsh|py|rb|go|rs|java|kt|swift|c|h|cc|cpp|cs|php|sql|prisma|graphql|gql|css|scss|sass|less|html?|vue|svelte|astro)$|(^|/)(Dockerfile|Makefile)$'
+            other=$({ printf '%s\n' "$files" | grep -vE '^docs/|\.md$'
+                      printf '%s\n' "$files" | grep -E '^docs/' | grep -vE '\.md$' | grep -iE "$code"
+                    } || true)
             if [ -n "$files" ] && [ -z "$other" ]; then
               docs_only=true; echo "Docs-only change, running only the secret scan."
             fi

@@ -69,9 +69,15 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
 - The secret scan checks only the PR's own commits, so a key on another branch
   or in old history can't turn an unrelated PR red. A push that isn't a merged
   PR scans the pushed commits.
-- **Docs-only changes** (`docs/**`, `*.md`) always run the secret scan, because
-  a key can be pasted into a doc. They skip the other checks above inside the
-  job, so the status still reports instead of sitting on "pending".
+- **Docs-only changes** always run the secret scan, because a key can be
+  pasted into a doc. They skip the other checks above inside the job, so the
+  status still reports instead of sitting on "pending". A change is docs-only
+  when every file is a `*.md`, or sits under `docs/` and isn't a code file
+  (`.ts`, `.js`, `.json`, `.yml`, `.py`, `.html`, `.css` and similar), judged by
+  path. A `*.md` counts as docs wherever it is, even if code reads it, such as
+  a prompt file. A renamed file counts under both its old and new name. When the file
+  list may be cut off (a PR whose list is shorter than its changed-file count,
+  or a push of 300 or more files), the change is not docs-only.
 - **`gantry / ci-ok`**: one summary check. It fails if any job failed or was
   cancelled; skipped jobs count as passing. This is the check to require.
 - Optional: **second review by Claude** (see below). Runs once when a PR opens
