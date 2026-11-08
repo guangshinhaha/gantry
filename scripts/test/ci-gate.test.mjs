@@ -238,6 +238,16 @@ for (const [name, files, docsOnly] of [
   ["package.json under docs/", ["docs/package.json"], false],
   ["yaml under docs/", ["docs/ci.yml"], false],
   ["a .md name that ends in a code extension is still .md", ["docs/limit.ts.md"], true],
+  // Adversary finds: under docs/ only known doc and image types count as docs.
+  ["extensionless script under docs/", ["docs/run"], false],
+  ["dotfile under docs/", ["docs/.env"], false],
+  ["hook under docs/", ["docs/.husky/pre-commit"], false],
+  ["mdx under docs/", ["docs/page.mdx"], false],
+  ["powershell under docs/", ["docs/x.ps1"], false],
+  ["Dockerfile.dev under docs/", ["docs/Dockerfile.dev"], false],
+  ["Jenkinsfile under docs/", ["docs/Jenkinsfile"], false],
+  ["a trailing carriage return hides the extension", ["docs/x.ts\r"], false],
+  ["pdf, txt and svg under docs/", ["docs/a.pdf", "docs/notes.txt", "docs/flow.svg"], true],
 ]) {
   test(`gate, PR: ${name} ${docsOnly ? "is docs-only" : "runs node"}`, () => {
     assert.equal(run({ files }), docsOnly ? "false" : "true");
@@ -289,6 +299,12 @@ test("package.json deleted on a push: node is set to fail", () => {
 
 test("a repo with no package.json and an unrelated change still skips node", () => {
   const r = runGate({ root: 404, files: ["src/x.go", "app/package.json"] });
+  assert.equal(r.outputs.node_error ?? "", "");
+  assert.equal(r.outputs.run_node, "false");
+});
+
+test("a name with a newline then package.json is not the root package.json", () => {
+  const r = runGate({ root: 404, files: ["a\npackage.json"] });
   assert.equal(r.outputs.node_error ?? "", "");
   assert.equal(r.outputs.run_node, "false");
 });
