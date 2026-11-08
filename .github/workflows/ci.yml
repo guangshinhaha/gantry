@@ -72,12 +72,13 @@ jobs:
             if [ "$merged" -gt 0 ]; then merged_pr=true; echo "Already tested in its PR."; fi
           fi
           if [ "$merged_pr" = false ]; then
-            # `files` ends up with every path the change touches, or stays empty
-            # when the list can't be trusted to be complete, which means "not
-            # docs-only". A rename lists both names: one JSON line per file
-            # carries filename and previous_filename, and the line count is the
-            # file count.
+            # `files` holds every path the change touches that the API listed,
+            # and `complete` says whether that is all of them. An incomplete
+            # list is never docs-only. A rename lists both names: one JSON line
+            # per file carries filename and previous_filename, and the line
+            # count is the file count.
             files=""
+            complete=false
             if [ "$EVENT" = pull_request ]; then
               entries=$(gh api --paginate "repos/$REPO/pulls/$PR/files" \
                 --jq '.[] | {f: .filename, p: .previous_filename} | @json')
@@ -85,8 +86,9 @@ jobs:
               listed=$(printf '%s\n' "$entries" | grep -c . || true)
               # The files API stops at 3000, so a shorter list than the PR's
               # changed_files hides the rest (gantry#61).
+              files=$(printf '%s\n' "$entries" | jq -r '.f, (.p // empty)')
               if [[ "$changed" =~ ^[0-9]+$ ]] && [ "$listed" -ge "$changed" ]; then
-                files=$(printf '%s\n' "$entries" | jq -r '.f, (.p // empty)')
+                complete=true
               else
                 echo "Changed-file list is incomplete ($listed of ${changed:-unknown}), so this is not treated as docs-only."
               fi
@@ -96,8 +98,9 @@ jobs:
               listed=$(printf '%s\n' "$entries" | grep -c . || true)
               # The compare API lists at most 300 files and has no next page, so
               # a full list may be cut off (gantry#62).
+              files=$(printf '%s\n' "$entries" | jq -r '.f, (.p // empty)')
               if [ "$listed" -lt 300 ]; then
-                files=$(printf '%s\n' "$entries" | jq -r '.f, (.p // empty)')
+                complete=true
               else
                 echo "Compare lists $listed files, the API's cap, so this is not treated as docs-only."
               fi
@@ -110,7 +113,7 @@ jobs:
             other=$({ printf '%s\n' "$files" | grep -vE '^docs/|\.md$'
                       printf '%s\n' "$files" | grep -E '^docs/' | grep -vE '\.md$' | grep -iE "$code"
                     } || true)
-            if [ -n "$files" ] && [ -z "$other" ]; then
+            if [ "$complete" = true ] && [ -n "$files" ] && [ -z "$other" ]; then
               docs_only=true; echo "Docs-only change, running only the secret scan."
             fi
           fi
@@ -154,7 +157,12 @@ jobs:
                   | jq -r '.tree[] | select(.type == "blob") | .path | select(. == "package.json" or endswith("/package.json"))')
               fi
               nested=$(printf '%s\n' "$found" | head -n 5 | paste -sd ' ' -)
-              if [ -n "$nested" ]; then
+              if printf '%s\n' "$files" | grep -qx 'package.json'; then
+                # The file list names the root package.json, and the head has
+                # none, so this change removed it or renamed it away. That
+                # isn't a repo that never had one (gantry#59).
+                node_error="this change removes or renames the root package.json, so the node job has nothing to run. Restore it, or set \`node: false\` if the project is leaving Node."
+              elif [ -n "$nested" ]; then
                 node_error="package.json is not at the repo root but was found at: $nested. gantry's node job only runs at the repo root. Move the project to the root, or set \`node: false\` and run its checks in your own workflow."
               fi
             fi
