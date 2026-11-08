@@ -370,8 +370,9 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
   review.yml    shared second review (claude-code-action) that repos call
   ac-check.yml  shared acceptance-criteria check (opt-in via --ac-check)
   build.yml     shared Docker build-and-verify, no push (opt-in via --docker)
-  own-ci.yml    gantry's own PR check (actionlint, script syntax, node --test); repos don't
-                call it
+  own-ci.yml    gantry's own check on PRs and main: actionlint, template callers against
+                the shared workflows' inputs (scripts/lint-template-calls.sh), hook
+                YAML parses, script syntax, node --test; repos don't call it
   selftest.yml  on gantry PRs that change ci.yml, runs that ci.yml on sample PRs in
                 gantry-sandbox and fails if a check stopped firing; repos don't call it
 template/       files gantry-init copies into a repo
