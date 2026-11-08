@@ -9,3 +9,5 @@ remotes:
       - hooks/node.yml
       # - hooks/prisma.yml
       # - hooks/nextjs.yml
+remotes:
+  - [bad
