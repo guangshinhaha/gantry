@@ -5,6 +5,10 @@
 #       types: [opened, reopened, synchronize, labeled, unlabeled]
 #   jobs:
 #     verdict-check:
+#       permissions:
+#         contents: read
+#         issues: read
+#         pull-requests: read
 #       uses: guangshinhaha/gantry/.github/workflows/verdict-check.yml@main
 #       # with:
 #       #   label: risk:high   # the label that marks a high-risk PR
