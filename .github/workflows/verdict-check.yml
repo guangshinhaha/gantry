@@ -1,0 +1,67 @@
+# gantry verdict check. Call it from a repo with:
+#
+#   on:
+#     pull_request:
+#       types: [opened, reopened, synchronize, labeled, unlabeled]
+#   jobs:
+#     verdict-check:
+#       permissions:
+#         contents: read
+#         issues: read
+#         pull-requests: read
+#       uses: guangshinhaha/gantry/.github/workflows/verdict-check.yml@main
+#       # with:
+#       #   label: risk:high   # the label that marks a high-risk PR
+#
+# Opt-in. A PR carrying the label fails unless a PR comment holds a verifier's
+# verdict {pr, head_sha, verdict, evidence} with verdict PASS or PASS+NOTES and
+# head_sha equal to the PR's current head, and no FAIL verdict for that head is
+# newer. A push moves the head, so it needs a new verdict. A PR without the
+# label skips. Only comments from OWNER, MEMBER or COLLABORATOR count, so a
+# stranger cannot post a PASS. It does not judge whether a verdict is right.
+#
+# A comment does not trigger the check: after posting a verdict, re-run it
+# (`gh run rerun <id>`, or "Re-run jobs" on the PR).
+name: gantry-verdict-check
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: '"ubuntu-latest"'
+      gantry-ref:
+        description: gantry ref for the check script
+        type: string
+        default: main
+      label:
+        description: PR label that marks a high-risk PR
+        type: string
+        default: risk:high
+      trusted-associations:
+        description: Comma-separated author_association values whose verdict comments count
+        type: string
+        default: OWNER,MEMBER,COLLABORATOR
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  verdict-check:
+    if: ${{ github.event.pull_request && contains(github.event.pull_request.labels.*.name, inputs.label) }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    steps:
+      - name: Require a verdict at head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          LABEL: ${{ inputs.label }}
+          TRUSTED: ${{ inputs.trusted-associations }}
+          GANTRY_REF: ${{ inputs.gantry-ref }}
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/verdict-check.mjs" -o /tmp/verdict-check.mjs
+          node /tmp/verdict-check.mjs
