@@ -166,6 +166,7 @@ report their own checks:
 | `ci.yml` | `gantry / ci-ok` | Yes, by default. |
 | `risky-paths.yml` | `risky-paths / risky-paths` | Optional, with `--require`. It fails only if the job breaks, because a matching path adds a label and doesn't fail the check. |
 | `ac-check.yml` | `ac-check / ac-check` | With `--require`, on repos that opted in with `--ac-check`. |
+| `verdict-check.yml` | `verdict-check / verdict-check` | Optional, with `--require`. It skips PRs without the high-risk label, and a skipped required check counts as passing. |
 | `build.yml` | `build / build` | No. It doesn't run on docs-only PRs, so they would wait forever. |
 | `review.yml` | `review / review` | No. It runs only on some PR events. |
 | `mutation.yml` | `mutation / mutation` | No. It doesn't run on docs-only PRs, so they would wait forever. |
@@ -290,6 +291,38 @@ separated list of paths (default `/`). It reports only, unless you set
 lower on accessibility. It needs the same preview URL as the smoke tests, so
 it skips whenever they do.
 
+## Verdict check
+
+A high-risk PR shouldn't merge on green CI alone. Opt in by calling
+`verdict-check.yml` from a repo workflow:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+jobs:
+  verdict-check:
+    permissions: { contents: read, issues: read, pull-requests: read }
+    uses: guangshinhaha/gantry/.github/workflows/verdict-check.yml@main
+    # with:
+    #   label: risk:high                              # default
+    #   trusted-associations: OWNER,MEMBER,COLLABORATOR   # default
+```
+
+A PR with the label (default `risk:high`) fails until a PR comment holds a
+verdict, as JSON, with `verdict` `PASS` or `PASS+NOTES` and a `head_sha` equal
+to the PR's current head. Without the label the check skips.
+
+```json
+{"pr": 12, "head_sha": "<full 40-character sha>", "verdict": "PASS", "evidence": ["node --test: 41 pass"]}
+```
+
+- A push moves the head, so it needs a new verdict.
+- A `FAIL` verdict at the head that is newer than every `PASS` at the head fails the check.
+- Only comments from `OWNER`, `MEMBER` or `COLLABORATOR` count. A `pr` field that names another PR is ignored.
+- A comment doesn't trigger the check. After posting a verdict, re-run it (`gh run rerun <id>`).
+- It checks that a verdict exists, not that it is right. Who sets the label is up to you.
+
 ## Risky paths
 
 Some changes deserve a human look however green CI is. List the paths in
@@ -395,6 +428,7 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
   risky-paths.yml  shared needs-human labelling that repos call
   review.yml    shared second review (claude-code-action) that repos call
   ac-check.yml  shared acceptance-criteria check (opt-in via --ac-check)
+  verdict-check.yml  shared check that a high-risk PR has a verdict at its head (opt-in)
   build.yml     shared Docker build-and-verify, no push (opt-in via --docker)
   own-ci.yml    gantry's own check on PRs and main: actionlint, template callers against
                 the shared workflows' inputs (scripts/lint-template-calls.sh), hook
@@ -410,6 +444,7 @@ scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 lighthouse-report.mjs: turns Lighthouse results into the PR comment section
                 risky-paths.mjs: glob matching for needs-human (tests in scripts/test/)
                 ac-check.mjs: parses PR/issue checklists (tests: ac-check.test.mjs)
+                verdict-check.mjs: finds the verdict at a PR's head (tests in scripts/test/)
                 selftest.mjs: the sandbox self-test that selftest.yml runs
 ```
 
