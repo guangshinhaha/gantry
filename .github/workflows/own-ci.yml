@@ -62,7 +62,8 @@ jobs:
         run: |
           yq --version
           fail=0
-          for f in hooks/*.yml template/lefthook.yml; do
+          for f in hooks/*.yml hooks/*.yaml template/lefthook.yml; do
+            [ -e "$f" ] || continue
             yq '.' "$f" > /dev/null || { echo "::error file=$f::invalid YAML"; fail=1; }
           done
           exit "$fail"
