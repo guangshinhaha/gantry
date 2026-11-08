@@ -218,7 +218,7 @@ function initWithNpm(dir, npmExitCode, ...flags) {
   const env = { ...process.env, PATH: `${join(dir, "stub-bin")}:${process.env.PATH}` };
   return spawnSync(INIT, [dir, ...flags], { encoding: "utf8", env });
 }
-const VITEST_OXFMT = pkg({ scripts: { "format:check": "oxfmt --check ." }, devDependencies: { oxfmt: "1.0.0", vitest: "1.0.0" } });
+const VITEST_OXFMT = pkg({ scripts: { "format:check": "oxfmt --check ." }, devDependencies: { oxfmt: "1.0.0", vitest: "2.0.0" } });
 
 test("biome: runs through its format command, found from its scoped package name", () =>
   withRepo((dir) => {
@@ -248,15 +248,52 @@ test("mutation path: stryker.config.mjs is formatted too", () =>
     assert.ok(argsOf(dir, "oxfmt").includes("stryker.config.mjs"));
   }));
 
-test("a failed install still exits non-zero, but formats what was already added", () =>
+test("a failed install warns, adds no mutation files, and the rest still runs", () =>
   withRepo((dir) => {
     put(dir, "package.json", VITEST_OXFMT);
     installFormatter(dir, "oxfmt");
-    assert.equal(initWithNpm(dir, 7).status, 7);
-    const args = argsOf(dir, "oxfmt");
-    assert.ok(args.includes("lefthook.yml"));
-    assert.ok(args.includes("stryker.config.mjs"), "written just before the install that failed");
+    const run = initWithNpm(dir, 7, "--review");
+    assert.equal(run.status, 0);
+    assert.match(run.stdout, /! .*install failed.*mutation testing is off/i);
+    assert.ok(existsSync(join(dir, ".github/workflows/review.yml")), "a later step still runs");
+    assert.equal(existsSync(join(dir, "stryker.config.mjs")), false);
+    assert.equal(existsSync(join(dir, ".github/workflows/mutation.yml")), false);
+    assert.ok(argsOf(dir, "oxfmt").includes("lefthook.yml"));
+    assert.ok(!argsOf(dir, "oxfmt").includes("stryker.config.mjs"));
   }));
+
+const VITEST_STRYKER = (vitest) => pkg({ scripts: { test: "vitest run" }, devDependencies: { vitest } });
+for (const vitest of ["1.6.0", "^1.6.0", "~1.2.0", "1.x", ">=1.0.0 <2"]) {
+  test(`vitest ${vitest} in package.json: mutation is off, no install, the rest still runs`, () =>
+    withRepo((dir) => {
+      put(dir, "package.json", VITEST_STRYKER(vitest));
+      const run = initWithNpm(dir, 7, "--review");
+      assert.equal(run.status, 0);
+      assert.match(run.stdout, /skip\s+mutation testing \(vitest <2/);
+      assert.ok(existsSync(join(dir, ".github/workflows/review.yml")));
+      assert.equal(existsSync(join(dir, "stryker.config.mjs")), false);
+      assert.equal(existsSync(join(dir, ".github/workflows/mutation.yml")), false);
+    }));
+}
+
+test("the installed vitest decides over the declared range", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", VITEST_STRYKER("*"));
+    put(dir, "node_modules/vitest/package.json", JSON.stringify({ name: "vitest", version: "1.6.1" }));
+    assert.match(initWithNpm(dir, 0).stdout, /skip\s+mutation testing \(vitest <2/);
+  }));
+
+for (const vitest of ["^2.1.0", "3.2.4", "latest"]) {
+  test(`vitest ${vitest}: mutation is set up`, () =>
+    withRepo((dir) => {
+      put(dir, "package.json", VITEST_STRYKER(vitest));
+      const run = initWithNpm(dir, 0);
+      assert.equal(run.status, 0);
+      assert.match(run.stdout, /install .*@stryker-mutator\/vitest-runner/);
+      assert.ok(existsSync(join(dir, "stryker.config.mjs")));
+      assert.ok(existsSync(join(dir, ".github/workflows/mutation.yml")));
+    }));
+}
 
 test("a formatter is picked once, even when the run exits after formatting", () =>
   withRepo((dir) => {
