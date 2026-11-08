@@ -218,7 +218,7 @@ function initWithNpm(dir, npmExitCode, ...flags) {
   const env = { ...process.env, PATH: `${join(dir, "stub-bin")}:${process.env.PATH}` };
   return spawnSync(INIT, [dir, ...flags], { encoding: "utf8", env });
 }
-const VITEST_OXFMT = pkg({ scripts: { "format:check": "oxfmt --check ." }, devDependencies: { oxfmt: "1.0.0", vitest: "1.0.0" } });
+const VITEST_OXFMT = pkg({ scripts: { "format:check": "oxfmt --check ." }, devDependencies: { oxfmt: "1.0.0", vitest: "2.0.0" } });
 
 test("biome: runs through its format command, found from its scoped package name", () =>
   withRepo((dir) => {
@@ -248,15 +248,139 @@ test("mutation path: stryker.config.mjs is formatted too", () =>
     assert.ok(argsOf(dir, "oxfmt").includes("stryker.config.mjs"));
   }));
 
-test("a failed install still exits non-zero, but formats what was already added", () =>
+test("a failed install warns, adds no mutation files, and the rest still runs", () =>
   withRepo((dir) => {
     put(dir, "package.json", VITEST_OXFMT);
     installFormatter(dir, "oxfmt");
-    assert.equal(initWithNpm(dir, 7).status, 7);
-    const args = argsOf(dir, "oxfmt");
-    assert.ok(args.includes("lefthook.yml"));
-    assert.ok(args.includes("stryker.config.mjs"), "written just before the install that failed");
+    const run = initWithNpm(dir, 7, "--review");
+    assert.equal(run.status, 0);
+    assert.match(run.stdout, /! .*install failed.*mutation testing is off/i);
+    assert.ok(existsSync(join(dir, ".github/workflows/review.yml")), "a later step still runs");
+    assert.equal(existsSync(join(dir, "stryker.config.mjs")), false);
+    assert.equal(existsSync(join(dir, ".github/workflows/mutation.yml")), false);
+    assert.ok(argsOf(dir, "oxfmt").includes("lefthook.yml"));
+    assert.ok(!argsOf(dir, "oxfmt").includes("stryker.config.mjs"));
   }));
+
+test("pnpm repo: a failed pnpm add warns and the rest still runs", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", VITEST_OXFMT);
+    put(dir, "pnpm-lock.yaml", "");
+    put(dir, "stub-bin/pnpm", "#!/bin/sh\necho \"$@\" > pnpm.args\nexit 1\n");
+    chmodSync(join(dir, "stub-bin/pnpm"), 0o755);
+    const run = initWithNpm(dir, 0, "--review");
+    assert.equal(run.status, 0);
+    assert.match(read(dir, "pnpm.args"), /^add -D @stryker-mutator\/core @stryker-mutator\/vitest-runner/);
+    assert.match(run.stdout, /! .*install failed.*mutation testing is off/i);
+    assert.ok(existsSync(join(dir, ".github/workflows/review.yml")));
+    assert.equal(existsSync(join(dir, "stryker.config.mjs")), false);
+  }));
+
+test("an install that leaves vitest 1 is rolled back, and the rest still runs", () =>
+  withRepo((dir) => {
+    const before = pkg({ scripts: { test: "vitest run" }, devDependencies: { vitest: "<2" } });
+    put(dir, "package.json", before);
+    // Like pnpm with lax peer deps: exits 0, writes the deps and resolves vitest 1.
+    put(dir, "stub-bin/npm", `#!/bin/sh
+mkdir -p node_modules/vitest
+echo '{"version":"1.6.1"}' > node_modules/vitest/package.json
+echo '{"changed":true}' > package.json
+echo '{}' > package-lock.json
+`);
+    chmodSync(join(dir, "stub-bin/npm"), 0o755);
+    const env = { ...process.env, PATH: `${join(dir, "stub-bin")}:${process.env.PATH}` };
+    const run = spawnSync(INIT, [dir, "--review"], { encoding: "utf8", env });
+    assert.equal(run.status, 0);
+    assert.match(run.stdout, /! the installed vitest is <2.*mutation testing is off/);
+    assert.equal(read(dir, "package.json"), before);
+    assert.equal(existsSync(join(dir, "package-lock.json")), false, "a lockfile the install created is removed");
+    assert.equal(existsSync(join(dir, "stryker.config.mjs")), false);
+    assert.equal(existsSync(join(dir, ".github/workflows/mutation.yml")), false);
+    assert.ok(existsSync(join(dir, ".github/workflows/review.yml")));
+  }));
+
+test("a failed install puts package.json and the lockfile back and shows the installer's output", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", VITEST_OXFMT);
+    put(dir, "package-lock.json", "{\"lock\":1}");
+    put(dir, "stub-bin/npm", "#!/bin/sh\necho half > package.json\necho half > package-lock.json\necho ERR_ON_STDOUT\nexit 1\n");
+    chmodSync(join(dir, "stub-bin/npm"), 0o755);
+    const env = { ...process.env, PATH: `${join(dir, "stub-bin")}:${process.env.PATH}` };
+    const run = spawnSync(INIT, [dir], { encoding: "utf8", env });
+    assert.equal(run.status, 0);
+    assert.match(run.stdout, /ERR_ON_STDOUT/);
+    assert.equal(read(dir, "package.json"), VITEST_OXFMT);
+    assert.equal(read(dir, "package-lock.json"), "{\"lock\":1}");
+  }));
+
+const VITEST_STRYKER = (vitest) => pkg({ scripts: { test: "vitest run" }, devDependencies: { vitest } });
+const offRun = (dir) => {
+  const run = initWithNpm(dir, 7, "--review");
+  assert.equal(run.status, 0);
+  assert.match(run.stdout, /skip\s+mutation testing \(vitest <2/);
+  assert.ok(existsSync(join(dir, ".github/workflows/review.yml")), "a later step still runs");
+  assert.equal(existsSync(join(dir, "stryker.config.mjs")), false);
+  assert.equal(existsSync(join(dir, ".github/workflows/mutation.yml")), false);
+};
+for (const vitest of ["1.6.0", "^1.6.0", "~1.2.0", "1.x", "1", "npm:vitest@1.6.0", "workspace:^1.6.0", "0.34.6", "^1.0.0-beta.1", "1.X", " ^1.6.0 "]) {
+  test(`vitest ${vitest} in package.json: mutation is off, no install, the rest still runs`, () =>
+    withRepo((dir) => {
+      put(dir, "package.json", VITEST_STRYKER(vitest));
+      offRun(dir);
+    }));
+}
+
+for (const vitest of [">=1.0.0 <2", "<2", "^1.0.0 || ~1.6.0", ">=1.6", "1.0.0 - 2.0.0", "<=0.34.6", "*"]) {
+  test(`vitest ${vitest} with vitest 1 installed: mutation is off`, () =>
+    withRepo((dir) => {
+      put(dir, "package.json", VITEST_STRYKER(vitest));
+      put(dir, "node_modules/vitest/package.json", JSON.stringify({ name: "vitest", version: "1.6.1" }));
+      offRun(dir);
+    }));
+}
+
+test("stryker-plan reads package-lock.json before a stale node_modules", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", VITEST_STRYKER(">=1.6"));
+    put(dir, "package-lock.json", JSON.stringify({ packages: { "node_modules/vitest": { version: "2.1.0" } } }));
+    put(dir, "node_modules/vitest/package.json", JSON.stringify({ name: "vitest", version: "1.6.1" }));
+    assert.match(initWithNpm(dir, 0).stdout, /install .*vitest-runner/);
+  }));
+
+test("a range with vitest 1 in package-lock.json: mutation is off", () =>
+  withRepo((dir) => {
+    put(dir, "package.json", VITEST_STRYKER(">=1.6"));
+    put(dir, "package-lock.json", JSON.stringify({ packages: { "node_modules/vitest": { version: "1.6.1" } } }));
+    offRun(dir);
+  }));
+
+for (const vitest of ["^2.1.0", ">=2.0.0", ">=2", "2.x || 3.x", "^v2"]) {
+  test(`declared vitest ${vitest} decides over a stale installed vitest 1`, () =>
+    withRepo((dir) => {
+      put(dir, "package.json", VITEST_STRYKER(vitest));
+      put(dir, "node_modules/vitest/package.json", JSON.stringify({ name: "vitest", version: "1.6.1" }));
+      // Like real npm: the install brings node_modules in line with the declared range.
+      put(dir, "stub-bin/npm", `#!/bin/sh\necho '{"version":"2.1.0"}' > node_modules/vitest/package.json\n`);
+      chmodSync(join(dir, "stub-bin/npm"), 0o755);
+      const env = { ...process.env, PATH: `${join(dir, "stub-bin")}:${process.env.PATH}` };
+      const run = spawnSync(INIT, [dir], { encoding: "utf8", env });
+      assert.match(run.stdout, /install .*vitest-runner/);
+      assert.ok(existsSync(join(dir, ".github/workflows/mutation.yml")));
+      assert.ok(existsSync(join(dir, "stryker.config.mjs")));
+    }));
+}
+
+for (const vitest of ["^2.1.0", "3.2.4", "latest", "10.0.0", "workspace:*", "^1.6.0 || ^2.0.0", ">=1.6"]) {
+  test(`vitest ${vitest}, nothing installed: mutation is set up`, () =>
+    withRepo((dir) => {
+      put(dir, "package.json", VITEST_STRYKER(vitest));
+      const run = initWithNpm(dir, 0);
+      assert.equal(run.status, 0);
+      assert.match(run.stdout, /install .*@stryker-mutator\/vitest-runner/);
+      assert.ok(existsSync(join(dir, "stryker.config.mjs")));
+      assert.ok(existsSync(join(dir, ".github/workflows/mutation.yml")));
+    }));
+}
 
 test("a formatter is picked once, even when the run exits after formatting", () =>
   withRepo((dir) => {
