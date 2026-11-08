@@ -269,3 +269,26 @@ test("gate, push: a rename of code to .md runs node", () => {
 test("gate, push: a code file under docs/ runs node", () => assert.equal(push(["docs/limit.ts"]), "true"));
 test("gate, push: a failed compare is not docs-only", () => assert.equal(push("fail"), "true"));
 test("gate, push: an empty list is not docs-only", () => assert.equal(push([]), "true"));
+
+// A change that removes or renames the root package.json leaves the head with
+// none, which looks like a repo that never had one. It must fail node instead
+// of skipping it (gantry#59, sandbox case #29).
+test("package.json renamed away: node is set to fail", () => {
+  const files = [{ filename: "package.md", previous_filename: "package.json", status: "renamed" }];
+  const r = runGate({ root: 404, files });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.run_node, "false");
+  assert.match(r.outputs.node_error, /root package\.json/);
+  assert.match(r.outputs.node_error, /node: false/);
+});
+
+test("package.json deleted on a push: node is set to fail", () => {
+  const r = runGate({ root: 404, event: "push", compare: [{ filename: "package.json", status: "removed" }] });
+  assert.match(r.outputs.node_error, /root package\.json/);
+});
+
+test("a repo with no package.json and an unrelated change still skips node", () => {
+  const r = runGate({ root: 404, files: ["src/x.go", "app/package.json"] });
+  assert.equal(r.outputs.node_error ?? "", "");
+  assert.equal(r.outputs.run_node, "false");
+});
