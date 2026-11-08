@@ -145,6 +145,8 @@ jobs:
     if: ${{ !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.merged_pr != 'true' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     steps:
+      # Full history, so the range below has both ends. It also fetches every
+      # branch, which is why the scan must name a range (gantry#36).
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -154,7 +156,8 @@ jobs:
       # and that's the only way to scan on a platform with no build here. Any
       # other platform fails with "unsupported platform", never a leak. bash, not
       # the default pwsh on Windows, so a Windows runner reaches that message.
-      - name: gitleaks
+      # secrets-scan.yml has a copy of this step, and a test keeps them the same.
+      - name: Install gitleaks
         shell: bash
         run: |
           if command -v gitleaks >/dev/null; then
@@ -176,9 +179,40 @@ jobs:
             if command -v sha256sum >/dev/null; then sum=sha256sum; else sum="shasum -a 256"; fi
             echo "$sha256  $dir/$tarball" | $sum -c -
             tar -xzf "$dir/$tarball" -C "$dir" gitleaks
-            export PATH="$dir:$PATH"
+            echo "$dir" >> "$GITHUB_PATH"
           fi
-          gitleaks detect --redact --verbose
+      # Scans only the commits this run adds, never other branches or history
+      # already on the base branch (gantry#36). Those are secrets-scan.yml's
+      # job: a daily scan of every branch that alerts without blocking a PR.
+      #   pull_request: the PR's own commits. The merge ref's first parent is
+      #     the base it merged into, so a stale base.sha can't widen the range.
+      #   push: the pushed commits. A new branch, or a `before` this clone
+      #     doesn't have, scans the pushed commit's whole history instead.
+      #   any other event: the checked-out commit's whole history.
+      - name: gitleaks
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ] && [ -n "$PR_HEAD" ]; then
+            base=$PR_BASE
+            if [ "$(git rev-parse -q --verify 'HEAD^2' || true)" = "$PR_HEAD" ]; then
+              base=$(git rev-parse 'HEAD^1')
+            fi
+            range="$base..$PR_HEAD"
+          elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ] \
+            && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..$SHA"
+          else
+            range=HEAD
+          fi
+          count=$(git rev-list --count "$range")
+          echo "Secret scan: $count commit(s) in $range" | tee -a "$GITHUB_STEP_SUMMARY"
+          gitleaks detect --redact --verbose --log-opts="$range"
 
   node:
     # Node/TS repos only: gate skips this job for a repo with no package.json.
