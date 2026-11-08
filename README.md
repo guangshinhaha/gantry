@@ -321,7 +321,7 @@ to the PR's current head. Without the label the check skips.
 - A `FAIL` verdict at the head that is newer than every `PASS` at the head fails the check.
 - Only comments from `OWNER`, `MEMBER` or `COLLABORATOR` count. A `pr` field that names another PR is ignored.
 - A comment doesn't trigger the check. After posting a verdict, re-run it (`gh run rerun <id>`).
-- It checks that a verdict exists, not that it is right. Who sets the label is up to you.
+- It checks that a verdict exists, not that it is right or independent: the author can post their own `PASS` if they hold one of those roles. Who sets the label is up to you.
 
 ## Risky paths
 

@@ -61,6 +61,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           LABEL: ${{ inputs.label }}
           TRUSTED: ${{ inputs.trusted-associations }}
+          GANTRY_REF: ${{ inputs.gantry-ref }}
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${{ inputs.gantry-ref }}/scripts/verdict-check.mjs" -o /tmp/verdict-check.mjs
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/verdict-check.mjs" -o /tmp/verdict-check.mjs
           node /tmp/verdict-check.mjs
