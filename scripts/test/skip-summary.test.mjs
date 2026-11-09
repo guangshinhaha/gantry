@@ -14,9 +14,11 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 // The `run: |` block of the step named `name`, de-indented.
 function stepScript(workflow, name) {
   const lines = readFileSync(join(root, ".github/workflows", workflow), "utf8").split("\n");
-  const step = lines.findIndex((l) => l.includes(`name: ${name}`));
+  const step = lines.findIndex((l) => l.trim() === `- name: ${name}`);
+  assert.ok(step >= 0, `step "${name}" not found in ${workflow}`);
+  const next = lines.findIndex((l, i) => i > step && /^\s*- /.test(l));
   const run = lines.findIndex((l, i) => i > step && /^\s*run: \|\s*$/.test(l));
-  assert.ok(step >= 0 && run > step, `step "${name}" not found in ${workflow}`);
+  assert.ok(run > step && (next < 0 || run < next), `step "${name}" in ${workflow} has no run: | block`);
   const body = [];
   let indent;
   for (const l of lines.slice(run + 1)) {
