@@ -261,14 +261,19 @@ jobs:
       # resolving a conflict, or in an evil merge, is seen, and a clean merge
       # adds nothing (gantry#69, #84). --text makes git diff a file even when
       # it looks binary (a NUL byte, or `-diff`), which would hide it from
-      # gitleaks. That needs git 2.40, which also sets GIT_ATTR_SOURCE: the
+      # gitleaks. It costs time on a PR that adds big binaries (about 0.5s per MB),
+      # and that is kept on purpose (gantry#104): skipping binary extensions or
+      # capping size would let a key hide in a file named x.zip or padded past
+      # the cap, and no extension or size check tells a real image from one. That needs git 2.40, which also sets GIT_ATTR_SOURCE: the
       # scan reads the base's .gitattributes (gantry#84).
       # A PR can't loosen the scan for itself (gantry#68, #84): it runs with the
       # base's .gitleaks.toml and .gitleaksignore (the default rules if the base
       # has none), never the PR's, and `gitleaks:allow` comments are ignored. A PR that touches either file, or adds a
       # line with `gitleaks:allow`, fails this step until a person with write
-      # access other than the PR's author approves it at its current head and
-      # the job is re-run. Once approved, the PR's own config and ignore file
+      # access (admin, maintain or write permission, read from the API, not the
+      # review's author_association) other than the PR's author approves it at
+      # its current head and the job is re-run. If the approval lookup itself
+      # fails, the step fails with that error and the same message. Once approved, the PR's own config and ignore file
       # apply, which is how a real false positive gets allowlisted.
       - name: gitleaks
         shell: bash
@@ -318,15 +323,34 @@ jobs:
             if [ -n "$changed" ]; then reasons+=("changes the scan's config ($(echo $changed))"); fi
             if [ -n "$allowed" ]; then reasons+=("adds gitleaks:allow ($(echo $allowed))"); fi
             approvers=""
+            lookup_error=""
             if [ "${#reasons[@]}" -gt 0 ]; then
-              approvers=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
-                | jq -rs --arg head "$PR_HEAD" --arg author "$PR_AUTHOR" \
+              # Who approved at the head: each reviewer's latest approving
+              # review. Whether they may clear the gate is their actual
+              # permission on the repo, not author_association: in an org repo
+              # a read-only member or collaborator has that association too.
+              errf=$(mktemp "${RUNNER_TEMP:-/tmp}/gh-err.XXXXXX")
+              if ! reviews=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate 2>"$errf"); then
+                lookup_error="could not read the PR's reviews: $(tr '\n' ' ' < "$errf")"
+              elif ! candidates=$(printf '%s' "$reviews" | jq -rs --arg head "$PR_HEAD" --arg author "$PR_AUTHOR" \
                   'add // [] | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))
                    | group_by(.user.login) | map(last)
-                   | .[] | select(.state == "APPROVED" and .commit_id == $head and .user.login != $author
-                       and (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))) | .user.login')
+                   | .[] | select(.state == "APPROVED" and .commit_id == $head and .user.login != $author) | .user.login' 2>"$errf"); then
+                lookup_error="could not read the PR's reviews: $(tr '\n' ' ' < "$errf")"
+              else
+                for login in $candidates; do
+                  if perm=$(gh api "repos/$REPO/collaborators/$login/permission" --jq .permission 2>"$errf"); then
+                    case "$perm" in admin|write) approvers+="${approvers:+ }$login" ;; esac
+                  elif ! grep -q 'HTTP 404' "$errf"; then
+                    # 404 means not a collaborator: not an approver. Anything
+                    # else means we could not tell, which must not pass.
+                    lookup_error="could not read $login's permission: $(tr '\n' ' ' < "$errf")"
+                    break
+                  fi
+                done
+              fi
             fi
-            if [ "${#reasons[@]}" -gt 0 ] && [ -n "$approvers" ]; then
+            if [ "${#reasons[@]}" -gt 0 ] && [ -z "$lookup_error" ] && [ -n "$approvers" ]; then
               echo "::notice::This PR changes what the secret scan accepts, and $(echo $approvers) approved it at $PR_HEAD: its own config applies."
               echo "Secret scan override approved by $(echo $approvers)." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
               reasons=()
@@ -354,7 +378,7 @@ jobs:
           (cd "$run_dir" && gitleaks detect "${scan[@]}" --source "$src" --log-opts="$range --diff-merges=remerge --text") || rc=$?
           if [ "${#reasons[@]}" -gt 0 ]; then
             why=$(printf '%s; and ' "${reasons[@]}")
-            msg="Secret scan override needs a person: this PR ${why%; and }. A person with write access, other than the PR's author, must approve the PR at its current head ($PR_HEAD), then re-run this job. Until then the scan runs with the base branch's config and ignore file."
+            msg="Secret scan override needs a person: this PR ${why%; and }. ${lookup_error:+The approval check itself failed ($lookup_error), so no approval could be counted. }A person with write access, other than the PR's author, must approve the PR at its current head ($PR_HEAD), then re-run this job. Until then the scan runs with the base branch's config and ignore file."
             echo "::error::$msg"
             echo "$msg" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
             exit 1

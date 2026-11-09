@@ -339,9 +339,22 @@ const real = (name, fn) => test(name, { skip: skipReal }, fn);
 const keyLine = () => `api_key = "${fakeKey()}"\n`;
 const allowlist = (path) => `[extend]\nuseDefault = true\n[allowlist]\npaths = ['''${path}''']\n`;
 
-// Stub gh: answers every call with the reviews JSON in $STUB_REVIEWS.
+// Stub gh: the reviews lookup answers with the JSON in $STUB_REVIEWS (or fails
+// when STUB_REVIEWS_FAIL is set); a collaborator-permission lookup answers
+// with the login's entry in the JSON object $STUB_PERMS, "write" if absent. An
+// entry that starts "HTTP" makes the call fail with that message.
 const REVIEWS = `#!/bin/bash
-cat "$STUB_REVIEWS"
+case "$*" in
+  *"/reviews"*)
+    if [ -n "$STUB_REVIEWS_FAIL" ]; then echo "gh: HTTP 502 Bad Gateway" >&2; exit 1; fi
+    cat "$STUB_REVIEWS" ;;
+  *"/collaborators/"*"/permission"*)
+    args="$*"; login=\${args#*collaborators/}; login=\${login%%/*}
+    v=$(jq -r --arg l "$login" '.[$l] // "write"' "$STUB_PERMS")
+    case "$v" in HTTP*) echo "gh: $v" >&2; exit 1 ;; esac
+    echo "$v" ;;
+  *) echo "unexpected gh call: $*" >&2; exit 9 ;;
+esac
 `;
 
 function put(repo, files, msg) {
@@ -388,13 +401,16 @@ function mergeSide(repo, base, { resolution, extra = {} }) {
   git(repo, "commit", "-q", "-m", "merge side");
 }
 
-const review = (user, state, commit, assoc = "COLLABORATOR") => ({ user: { login: user }, state, commit_id: commit, author_association: assoc });
-function realScan(f, reviews = []) {
+// author_association is deliberately generous: what counts is the permission.
+const review = (user, state, commit) => ({ user: { login: user }, state, commit_id: commit, author_association: "OWNER" });
+function realScan(f, reviews = [], { perms = {}, reviewsFail = "" } = {}) {
   const file = join(f.dir, "reviews.json");
   writeFileSync(file, JSON.stringify(reviews));
+  const permFile = join(f.dir, "perms.json");
+  writeFileSync(permFile, JSON.stringify(perms));
   return bash(stepScript(CI, "gitleaks"), {
     dir: f.dir, cwd: f.repo,
-    env: { EVENT: "pull_request", PR_BASE: f.base, PR_HEAD: f.head, PR_NUMBER: "7", PR_AUTHOR: "alice", REPO: "o/r", GH_TOKEN: "x", SHA: git(f.repo, "rev-parse", "HEAD"), STUB_REVIEWS: file },
+    env: { EVENT: "pull_request", PR_BASE: f.base, PR_HEAD: f.head, PR_NUMBER: "7", PR_AUTHOR: "alice", REPO: "o/r", GH_TOKEN: "x", SHA: git(f.repo, "rev-parse", "HEAD"), STUB_REVIEWS: file, STUB_PERMS: permFile, STUB_REVIEWS_FAIL: reviewsFail },
   });
 }
 
@@ -544,22 +560,64 @@ real("an approved PR's own .gitleaks.toml applies, so a real false positive can 
   assert.equal(r.status, 0, r.out);
 });
 
-for (const [why, reviews] of [
-  ["the author's own approval", (h) => [review("alice", "APPROVED", h, "OWNER")]],
+for (const [why, reviews, perms] of [
+  ["the author's own approval", (h) => [review("alice", "APPROVED", h)]],
   ["an approval of an earlier commit", () => [review("bob", "APPROVED", "1".repeat(40))]],
   ["an approval a later change request overrides", (h) => [review("bob", "APPROVED", h), review("bob", "CHANGES_REQUESTED", h)]],
   ["a dismissed approval", (h) => [review("bob", "APPROVED", h), review("bob", "DISMISSED", h)]],
-  ["an approval from someone with no write access", (h) => [review("eve", "APPROVED", h, "CONTRIBUTOR")]],
+  ["an approval from someone with only read access", (h) => [review("eve", "APPROVED", h)], { eve: "read" }],
+  ["an approval from a read-only org member (association MEMBER, permission read)", (h) => [review("eve", "APPROVED", h)], { eve: "read" }],
+  ["an approval from someone with triage access (the API reports read)", (h) => [review("eve", "APPROVED", h)], { eve: "read" }],
+  ["an approval from someone who isn't a collaborator at all (404)", (h) => [review("eve", "APPROVED", h)], { eve: "HTTP 404: Not Found" }],
   ["a comment, not an approval", (h) => [review("bob", "COMMENTED", h)]],
   ["no review at all", () => []],
 ]) {
   real(`${why} doesn't clear the override`, () => {
     const f = realPr({ build: ALLOW_COMMENT });
-    const r = realScan(f, reviews(f.head));
+    const r = realScan(f, reviews(f.head), { perms });
     assert.equal(r.status, 1, r.out);
     assert.match(r.out, /override needs a person/);
+    assert.doesNotMatch(r.out, /approval check itself failed/);
   });
 }
+
+for (const perm of ["admin", "write"]) {
+  real(`an approver with ${perm} permission clears the override`, () => {
+    const f = realPr({ build: ALLOW_COMMENT });
+    const r = realScan(f, [review("bob", "APPROVED", f.head)], { perms: { bob: perm } });
+    assert.equal(r.status, 0, r.out);
+  });
+}
+
+real("one approver with write permission is enough when another has only read", () => {
+  const f = realPr({ build: ALLOW_COMMENT });
+  const r = realScan(f, [review("eve", "APPROVED", f.head), review("bob", "APPROVED", f.head)], { perms: { eve: "read" } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /bob approved it/);
+  assert.doesNotMatch(r.out, /eve approved/);
+});
+
+real("a failed reviews lookup fails with the 'needs a person' message and gh's error (gantry#104)", () => {
+  const f = realPr({ build: ALLOW_COMMENT });
+  const r = realScan(f, [review("bob", "APPROVED", f.head)], { reviewsFail: "1" });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /override needs a person/);
+  assert.match(r.out, /approval check itself failed \(could not read the PR's reviews: gh: HTTP 502/);
+  assert.match(r.summary, /override needs a person/);
+});
+
+real("a failed permission lookup fails with the 'needs a person' message, never passes (gantry#104)", () => {
+  const f = realPr({ build: ALLOW_COMMENT });
+  const r = realScan(f, [review("bob", "APPROVED", f.head)], { perms: { bob: "HTTP 500 Server Error" } });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /override needs a person/);
+  assert.match(r.out, /could not read bob's permission: gh: HTTP 500/);
+});
+
+real("a key in a NUL-padded file named like an archive is still scanned, so --text stays (gantry#104)", () => {
+  const f = realPr({ build: (repo) => put(repo, { "assets/bundle.zip": `PK\x03\x04\0\0\n${keyLine()}` }, "archive") });
+  assert.equal(realScan(f).status, 1);
+});
 
 real("an approval followed by a plain comment from the same person still counts", () => {
   const f = realPr({ build: ALLOW_COMMENT });
