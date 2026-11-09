@@ -15,6 +15,7 @@ jobs:
     uses: guangshinhaha/gantry/.github/workflows/preview.yml@main
     with:
       platform: __PLATFORM__ # gantry-init fills this in (railway or vercel)
+      # gantry:optional
       # lighthouse: true            # report-only scan after smoke passes
       # lighthouse-urls: "/ /login"  # paths to scan (default /)
       # lighthouse-min-a11y: 90     # fail below this accessibility score

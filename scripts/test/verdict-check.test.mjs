@@ -86,3 +86,11 @@ test("two verdicts in one comment: the later one wins", () => {
   const body = JSON.stringify(v("PASS")) + "\n" + JSON.stringify(v("FAIL"));
   assert.equal(run([c(null, { raw: body })]).status, "fail");
 });
+
+test("an earlier PASS comment edited to FAIL is newer than a later PASS", () => {
+  const pass1 = c(v("PASS"), { at: "2026-11-08T00:00:00Z" });
+  const pass2 = c(v("PASS"), { at: "2026-11-08T00:05:00Z" });
+  assert.equal(run([pass1, pass2]).status, "pass");
+  const edited = { ...pass1, body: "```json\n" + JSON.stringify(v("FAIL")) + "\n```", updated_at: "2026-11-08T00:10:00Z" };
+  assert.equal(run([edited, pass2]).status, "fail");
+});

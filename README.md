@@ -39,7 +39,7 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
 ## What runs when
 
 **On every commit** (fast, staged files only)
-- **Secret scan** (gitleaks): blocks API keys, tokens and passwords.
+- **Secret scan** (gitleaks): flags a key written in a form gitleaks' rules recognise. It misses some forms; see [Secret scan](#secret-scan).
 - **No escape hatches:** blocks newly added `any`, `as any`, `@ts-ignore` and
   `eslint-disable`, the usual ways to make an error disappear instead of fixing it.
 - **ESLint** on the staged files, if the repo uses ESLint.
@@ -70,7 +70,29 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   audits in the same PR comment). See below.
 - The secret scan checks only the PR's own commits, so a key on another branch
   or in old history can't turn an unrelated PR red. A push that isn't a merged
-  PR scans the pushed commits.
+  PR scans the pushed commits. A PR can't loosen the scan for itself; see
+  [Secret scan](#secret-scan).
+- **A push that is a merged PR skips every job**, but only when a PR merged
+  into the pushed branch and its head had a green `ci-ok`. A PR merged into
+  another branch, or one whose CI was red (an admin merge, or a re-run of the
+  red push), runs the checks. Reading the PR's checks needs no extra
+  permission on a public repo. A private repo's caller must grant
+  `checks: read`, or the skip never fires and every push runs the checks.
+- **A retargeted PR re-runs `ci`.** The template caller listens for `edited`,
+  the only event GitHub sends when a PR's base changes. An edit that leaves the
+  base alone (title, body) skips the caller's job and can't cancel a run in
+  flight. The caller's trigger is:
+
+  ```yaml
+  on:
+    push:
+      branches: [main]
+    pull_request:
+      types: [opened, synchronize, reopened, edited]
+  ```
+
+  A caller copied before this has no `edited`: add the `types:` line, the
+  `if:` and the `group:` suffix from `template/.github/workflows/ci.yml`.
 - **Docs-only changes** always run the secret scan, because a key can be
   pasted into a doc. They skip the other checks above inside the job, so the
   status still reports instead of sitting on "pending". A change is docs-only
@@ -91,7 +113,8 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   (Northflank), Railway and Vercel build the image themselves, and only AWS
   apps push to ECR. A registry push may come back later as an opt-in. Without
   a Dockerfile it skips and says so (`Skipped: no Dockerfile`) in the job
-  summary.
+  summary. Add `run-image: true` to also run the image and probe it (see
+  [Docker smoke test](#docker-smoke-test-opt-in)).
 
 **Once a day** (GitHub Actions, `secrets-scan.yml`)
 - **Secret scan of every branch and all history.** It never blocks a PR. A leak
@@ -245,6 +268,53 @@ test covers (it names them), and existing tests that already fail (mutation
 testing is skipped; the test job reports the failures). Only a real miss of
 `thresholds.break` turns the check red.
 
+## Docker smoke test (opt-in)
+
+`build.yml` only builds the image by default. Turn on `run-image` and it also
+loads the image, runs it, waits for health, and checks the probes you declare.
+Use it when "the image builds" isn't enough: a container that starts and
+crashes, a missing route, a static file served with the wrong status.
+
+```yaml
+jobs:
+  build:
+    uses: guangshinhaha/gantry/.github/workflows/build.yml@main
+    with:
+      run-image: true
+      port: 3000            # the port the container listens on (also passed as PORT)
+      health-path: /health  # must answer 2xx within health-timeout seconds
+      probes: |             # optional, one per line: <path> [expected status]
+        / 200
+        /missing.js 404
+    permissions:
+      contents: read
+```
+
+| Input | Default | Meaning |
+|---|---|---|
+| `run-image` | `false` | Off unless you set it. With it off, the job is unchanged. |
+| `port` | `3000` | Container port, published on the same port of the runner. |
+| `health-path` | `/health` | Polled until it answers 2xx. |
+| `probes` | none | Extra `GET` checks. The status defaults to `200`. Blank lines and `#` lines are ignored. |
+| `health-timeout` | `60` | Seconds to wait for health before failing. |
+
+`run-image` needs a single `platforms` value (the default `linux/amd64` is fine),
+because Docker can only load one platform into the runner. It must also match
+the runner's architecture, or the container dies with an exec format error.
+The container is published on `127.0.0.1` only.
+
+**When it fails.** The job goes red and each failure is an error annotation, and
+a line in the job summary, that names the probe, for example
+`GET /missing.js expected 200, got 404`, or
+`health GET /health: no 2xx within 60s (last status 500)`, or
+`health GET /health: the container exited before it answered`. A bad extra probe
+doesn't stop the others: one run lists every failed probe. The last 50 lines of
+the container log follow. A health failure stops there, since the app isn't up.
+
+**Limits.** It sends `GET` only, and it doesn't pass secrets or env vars to the
+container beyond `PORT`, so an app that needs a database or keys to start
+won't pass health. The preview smoke tests below cover a deployed app.
+
 ## Preview smoke tests
 
 CI tests the code; this tests the deployed app. For each PR, `preview.yml`
@@ -310,9 +380,11 @@ A high-risk PR shouldn't merge on green CI alone. Opt in by calling
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
 jobs:
   verdict-check:
-    permissions: { contents: read, issues: read, pull-requests: read }
+    permissions: { actions: write, contents: read, issues: read, pull-requests: read }
     uses: guangshinhaha/gantry/.github/workflows/verdict-check.yml@main
     # with:
     #   label: risk:high                              # default
@@ -330,8 +402,53 @@ to the PR's current head. Without the label the check skips.
 - A push moves the head, so it needs a new verdict.
 - A `FAIL` verdict at the head that is newer than every `PASS` at the head fails the check.
 - Only comments from `OWNER`, `MEMBER` or `COLLABORATOR` count. A `pr` field that names another PR is ignored.
-- A comment doesn't trigger the check. After posting a verdict, re-run it (`gh run rerun <id>`).
+- Posting, editing or deleting a comment that mentions `verdict` re-runs the PR's runs of the calling workflow at its head (a PR opened with the label has one per event; a run still going is waited for first), so the check turns green or red by itself. `gantry-init --verdict-check` adds a caller that does this. The caller must be on the default branch, because comment events run there, and it needs `actions: write` for the re-run. A caller without `actions: write` fails to start (`startup_failure`) on every event, so its check never reports: add the permission when upgrading an older caller. Without `issue_comment` in the caller, re-run by hand (`gh run rerun <id>`).
+- The check still shows its earlier result until the re-run starts, a few seconds after the comment. Don't merge in that gap.
 - It checks that a verdict exists, not that it is right or independent: the author can post their own `PASS` if they hold one of those roles. Who sets the label is up to you.
+
+## Secret scan
+
+The `secrets` job in `ci.yml` runs gitleaks (v8.30.1, default rules) over the
+commits the run adds. The local hook runs the same tool on staged files, and
+`secrets-scan.yml` scans every branch once a day.
+
+**What it catches.** What gitleaks' rules match, and that is narrower than "any
+key". In docs, the generic rule needs the `name = "value"` shape. These pass,
+though the same key is flagged in that shape:
+- a key in a Markdown table, in prose (`The staging API key is ...`) or in bold
+  (`**API key:** ...`);
+- a file saved as UTF-16, which git treats as binary;
+- a file under a path gitleaks' default rules skip, such as lock files, `node_modules`, `go.sum` and `.svg`;
+- a key with low entropy: about 1 in 6 random 32-character hex keys pass.
+
+Treat a green scan as "no key in a form gitleaks knows", not "no key".
+
+**Merge commits.** A merge commit is scanned for what it adds beyond an
+automatic merge of its parents (`--diff-merges=remerge`), so a key added while
+resolving a conflict, or in an evil merge, fails the scan. A clean merge adds
+nothing, so main merged back into a PR branch doesn't bring main's history into
+the scan. Git skips this for octopus merges (three or more parents), so a key added only in one isn't seen. The daily scan doesn't read merge commits this way.
+
+**What a PR can't change for itself.** The scan runs with the base branch's
+`.gitleaks.toml` and `.gitleaksignore` (gitleaks' default rules if the base has
+none), the base's `.gitattributes` (so a `-diff` line can't hide a file), and
+with `gitleaks:allow` comments ignored. A PR that changes a `.gitleaks.toml`
+or `.gitleaksignore` anywhere in the repo, or adds a line containing
+`gitleaks:allow` (a doc that mentions it counts), fails the `secrets` job until
+a person approves it:
+- the approver must be the repo's owner, a member or a collaborator (GitHub's
+  association on the review) and not the PR's author;
+- the approval must be on the PR's current head, so a later push needs a new one;
+- after approving, re-run the `secrets` job. The PR's own config, ignore file
+  and allow comments then apply, which is how a real false positive gets
+  allowlisted. Once merged, the change is the base's, and later PRs use it.
+
+A repo with one person has no approver. Land such a change with an admin's direct push or branch-protection bypass.
+
+**Needs.** git 2.40 or newer (older fails the job with a message), and `gh`
+and `jq` on the runner (GitHub-hosted runners have both). A base
+`.gitleaks.toml` may extend a file by relative path (`[extend] path`); the scan
+then reads that file from the base, not from the PR.
 
 ## Risky paths
 
@@ -391,7 +508,7 @@ applies gantry, writes a starting CLAUDE.md, and asks before pushing.
 **Existing repo:**
 
 ```sh
-~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--ac-check]
+~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--ac-check] [--verdict-check]
 git add -A && git commit -m "Add gantry checks"
 ```
 
@@ -410,6 +527,7 @@ and no others, with the repo's local binary. It adds:
 | `.github/gantry-risky-paths` | Example list of risky globs. Edit to fit the repo. |
 | `.github/workflows/review.yml` | Second review by Claude. Only with `--review`. |
 | `.github/workflows/ac-check.yml` | Only with `--ac-check`: calls gantry's acceptance-criteria check. Kept if it already exists. |
+| `.github/workflows/verdict-check.yml` | Only with `--verdict-check`: calls gantry's verdict check, which also re-runs when a verdict comment is posted. Kept if it already exists. It blocks a merge only once `verdict-check / verdict-check` is a required check. |
 | `.github/pull_request_template.md` | PR template: `Closes #`, how I verified. With `--ac-check`, or if the repo already has `ac-check.yml`, it also has an acceptance criteria section. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
 | `.github/workflows/build.yml` | Only with `--docker`: calls gantry's build-and-verify Docker build (no push). |
@@ -441,8 +559,8 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
   verdict-check.yml  shared check that a high-risk PR has a verdict at its head (opt-in)
   build.yml     shared Docker build-and-verify, no push (opt-in via --docker)
   own-ci.yml    gantry's own check on PRs and main: actionlint, template callers against
-                the shared workflows' inputs (scripts/lint-template-calls.sh), hook
-                YAML parses, script syntax, node --test; repos don't call it
+                the shared workflows' inputs, commented-out options included
+                (scripts/lint-template-calls.sh), hook YAML via lefthook validate, script syntax, node --test; repos don't call it
   selftest.yml  on gantry PRs that change ci.yml, runs that ci.yml on sample PRs in
                 gantry-sandbox and fails if a check stopped firing; repos don't call it
 template/       files gantry-init copies into a repo
@@ -455,6 +573,7 @@ scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 risky-paths.mjs: glob matching for needs-human (tests in scripts/test/)
                 ac-check.mjs: parses PR/issue checklists (tests: ac-check.test.mjs)
                 verdict-check.mjs: finds the verdict at a PR's head (tests in scripts/test/)
+                verdict-rerun.mjs: re-runs a PR's verdict-check on a verdict comment (tests in scripts/test/)
                 selftest.mjs: the sandbox self-test that selftest.yml runs
 ```
 

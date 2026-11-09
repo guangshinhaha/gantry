@@ -9,7 +9,9 @@
 # If a changed file matches, adds the `needs-human` label and keeps one sticky
 # comment listing the matched files and globs. If nothing matches (any more),
 # removes both. Skips itself when the list is absent or the PR is from a fork
-# (forks get a read-only token, so it cannot label or comment).
+# (forks get a read-only token, so it cannot label or comment). Every skip writes
+# "Skipped: <reason>" to the job summary, so the conditions live in a step, not a
+# job-level `if:`, which would skip the whole job with no way to say why.
 name: gantry-risky-paths
 
 on:
@@ -29,16 +31,32 @@ permissions:
 
 jobs:
   risky-paths:
-    if: ${{ github.event.pull_request && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
+      - name: Decide whether to run
+        id: gate
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$PR_NUMBER" ]; then reason="not a pull request"
+          elif [ "$HEAD_REPO" != "$REPO" ]; then reason="fork PR (its token is read-only, so it cannot label or comment)"
+          else echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "Skipping: $reason"
+          echo "Skipped: $reason" >> "$GITHUB_STEP_SUMMARY"
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
         with:
           ref: ${{ github.event.pull_request.base.sha }} # trusted list; PR code is never run
 
       - name: Match changed files
         id: scan
+        if: steps.gate.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
@@ -46,6 +64,7 @@ jobs:
           list=.github/gantry-risky-paths
           if [ ! -f "$list" ]; then
             echo "No $list on the base branch: risky-paths check is off for this repo."
+            echo "Skipped: no $list on the base branch, risky-paths check is off for this repo." >> "$GITHUB_STEP_SUMMARY"
             echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "run=true" >> "$GITHUB_OUTPUT"

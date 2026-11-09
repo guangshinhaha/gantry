@@ -13,5 +13,13 @@ concurrency:
 jobs:
   build:
     uses: guangshinhaha/gantry/.github/workflows/build.yml@main
+    # gantry:optional
+    # with:
+    #   run-image: true        # smoke test: run the image, wait for health, check probes
+    #   port: 3000             # the port the container listens on
+    #   health-path: /health
+    #   probes: |
+    #     / 200
+    #     /missing.js 404
     permissions:
       contents: read

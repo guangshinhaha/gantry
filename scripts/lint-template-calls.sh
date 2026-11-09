@@ -4,7 +4,11 @@
 # guangshinhaha/gantry/.github/workflows/X.yml@main, which actionlint can't
 # read, so this copies them into a scratch repo next to this checkout's shared
 # workflows, repoints them at ./.github/workflows/X.yml, and lets actionlint
-# check each call. Options left commented out in a template are not checked.
+# check each call. Options left commented out are checked too when the comment
+# block starts with a `# gantry:optional` line: the block is uncommented in the
+# scratch copy, as a repo would when it turns the options on. The block ends at
+# the first line that isn't a comment, so a blank line before any prose comment
+# keeps it out.
 # Errors are reported against the template/ path, as GitHub annotations.
 set -eu
 
@@ -21,7 +25,13 @@ status=0
 for f in "$root"/template/.github/workflows/*.yml "$root"/template/.github/workflows/*.yaml; do
   [ -e "$f" ] || continue
   out="$tmp/.github/workflows/caller-$(basename "$f")"
-  sed -E 's#guangshinhaha/gantry/(\.github/workflows/[^@ "]+)@[^ "'"'"']+#./\1#' "$f" > "$out"
+  # The marker line becomes a blank line so line numbers still match the template.
+  awk '
+    /^[ \t]*# gantry:optional[ \t]*$/ { on = 1; print ""; next }
+    on && /^[ \t]*#/ { sub(/# ?/, ""); print; next }
+    { on = 0; print }
+  ' "$f" |
+    sed -E 's#guangshinhaha/gantry/(\.github/workflows/[^@ "]+)@[^ "'"'"']+#./\1#' > "$out"
   # A shared-workflow call this didn't repoint is remote, so actionlint can't
   # check it. Fail rather than pass it unchecked.
   if grep -nE '^[^#]*uses: *["'"'"']?[^."'"'"' ][^ ]*/\.github/workflows/' "$out" > "$tmp/remote"; then
@@ -31,6 +41,28 @@ for f in "$root"/template/.github/workflows/*.yml "$root"/template/.github/workf
     status=1
   fi
 done
+
+# A caller must grant every permission a job of the shared workflow asks for, or
+# GitHub fails the whole call at startup (startup_failure) and a required check
+# from it never reports. actionlint doesn't compare the two.
+rank() { case "$1" in write) echo 2 ;; read) echo 1 ;; *) echo 0 ;; esac; }
+for f in "$root"/template/.github/workflows/*.yml; do
+  [ -e "$f" ] || continue
+  for job in $(yq '.jobs | to_entries | .[] | select(.value.uses != null) | .key' "$f"); do
+    uses=$(yq ".jobs.\"$job\".uses" "$f")
+    case "$uses" in guangshinhaha/gantry/.github/workflows/*@*) ;; *) continue ;; esac
+    callee="$root/$(printf '%s' "$uses" | sed -E 's#guangshinhaha/gantry/(\.github/workflows/[^@]+)@.*#\1#')"
+    [ -e "$callee" ] || continue
+    yq '.jobs[].permissions // {} | to_entries | .[] | .key + " " + .value' "$callee" | sort -u | while read -r perm level; do
+      granted=$(yq ".jobs.\"$job\".permissions.\"$perm\" // .permissions.\"$perm\" // \"none\"" "$f")
+      if [ "$(rank "$granted")" -lt "$(rank "$level")" ]; then
+        echo "::error file=template/.github/workflows/$(basename "$f")::job $job grants $perm: $granted, but $(basename "$callee") asks for $perm: $level, so the call fails at startup"
+        echo 1 > "$tmp/perm-fail"
+      fi
+    done
+  done
+done
+[ ! -e "$tmp/perm-fail" ] || status=1
 
 cd "$tmp"
 # Same severity as the actionlint step in own-ci.yml: info-level notes pass.

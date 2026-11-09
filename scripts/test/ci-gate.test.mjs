@@ -38,7 +38,8 @@ case "$*" in
   *"/pulls/"*"/files"*) printf '%s' "$STUB_FILES" | jq -r "$(filter "$@")" ;;
   *"/pulls/"*) printf '%s' "$STUB_PR" | jq -r "$(filter "$@")" ;;
   *"/compare/"*) [ "$STUB_COMPARE" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }; printf '%s' "$STUB_COMPARE" | jq -r "$(filter "$@")" ;;
-  *"/commits/"*"/pulls"*) printf '%s' "$STUB_MERGED" | jq -r "$(filter "$@")" ;;
+  *"/commits/"*"/pulls"*) [ "$STUB_MERGED" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_MERGED" | jq -r "$(filter "$@")" ;;
+  *"/commits/"*"/check-runs"*) [ "$STUB_CHECKS" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_CHECKS" | jq -r "$(filter "$@")" ;;
   *"/contents/package.json"*)
     case "$STUB_ROOT" in
       200) exit 0 ;;
@@ -67,6 +68,7 @@ esac
 function runGate({
   root, tree = [], truncated = false, treeFails = false, treeBody = "", gitPaths = null, node = "true",
   files = ["src/x.ts"], changed = files.length, event = "pull_request", compare = [], merged = [],
+  ref = "refs/heads/main", checks = { check_runs: [] },
 }) {
   const entry = (f) => (typeof f === "string" ? { filename: f } : f);
   const dir = mkdtempSync(join(tmpdir(), "gantry-gate-"));
@@ -89,7 +91,8 @@ function runGate({
         GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary,
         REPO: "o/r", EVENT: event, PR: "1", SHA: "abc", BEFORE: event === "push" ? "def" : "",
         STUB_FILES: JSON.stringify(files.map(entry)), STUB_PR: JSON.stringify({ changed_files: changed }),
-        STUB_COMPARE: compare === "fail" ? "fail" : JSON.stringify({ files: compare.map(entry) }), STUB_MERGED: JSON.stringify(merged),
+        STUB_COMPARE: compare === "fail" ? "fail" : JSON.stringify({ files: compare.map(entry) }), STUB_MERGED: merged === "fail" ? "fail" : JSON.stringify(merged),
+        PUSHED_REF: ref, STUB_CHECKS: checks === "fail" ? "fail" : JSON.stringify(checks),
         NODE_INPUT: node, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
         LANG: "C.UTF-8", RUNNER_TEMP: dir, GITHUB_SERVER_URL: "https://github.com", GH_TOKEN: "t",
       },
@@ -307,4 +310,75 @@ test("a name with a newline then package.json is not the root package.json", () 
   const r = runGate({ root: 404, files: ["a\npackage.json"] });
   assert.equal(r.outputs.node_error ?? "", "");
   assert.equal(r.outputs.run_node, "false");
+});
+
+// Merged-PR skip (gantry#63, #64). A push skips every job only when a PR that
+// merged into the pushed branch had a green ci-ok at its head.
+const prInto = (base, head = "h1") => ({ merged_at: "2026-01-01T00:00:00Z", base: { ref: base }, head: { sha: head } });
+const ciOk = (conclusion, name = "gantry / ci-ok", app = "github-actions") => ({ check_runs: [{ name, conclusion, app: { slug: app } }] });
+const pushRun = (o) => runGate({ root: 200, event: "push", compare: ["src/x.ts"], ...o });
+
+test("merged-PR push, PR head green: skips every job", () => {
+  const r = pushRun({ merged: [prInto("main")], checks: ciOk("success") });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.merged_pr, "true");
+  assert.equal(r.outputs.run_node, "false");
+});
+
+test("gantry#63: a PR merged into another branch doesn't skip this push", () => {
+  const r = pushRun({ merged: [prInto("verify/int-a-fwd-a")], checks: ciOk("success"), ref: "refs/heads/verify/int-a-fwd-b" });
+  assert.equal(r.outputs.merged_pr, "false");
+  assert.equal(r.outputs.run_node, "true");
+});
+
+test("gantry#63: a PR that is open or closed unmerged doesn't skip", () => {
+  const r = pushRun({ merged: [{ ...prInto("main"), merged_at: null }], checks: ciOk("success") });
+  assert.equal(r.outputs.merged_pr, "false");
+});
+
+test("gantry#63: a branch is matched whole, not as a prefix or a tag", () => {
+  assert.equal(pushRun({ merged: [prInto("main")], checks: ciOk("success"), ref: "refs/heads/main-2" }).outputs.merged_pr, "false");
+  assert.equal(pushRun({ merged: [prInto("main")], checks: ciOk("success"), ref: "refs/tags/main" }).outputs.merged_pr, "false");
+});
+
+test("gantry#64: a merged PR whose head ci-ok failed doesn't skip", () => {
+  const r = pushRun({ merged: [prInto("main")], checks: ciOk("failure") });
+  assert.equal(r.outputs.merged_pr, "false");
+  assert.equal(r.outputs.run_node, "true");
+});
+
+test("gantry#64: no ci-ok at the PR head, or one still running, doesn't skip", () => {
+  assert.equal(pushRun({ merged: [prInto("main")], checks: { check_runs: [] } }).outputs.merged_pr, "false");
+  assert.equal(pushRun({ merged: [prInto("main")], checks: ciOk(null) }).outputs.merged_pr, "false");
+});
+
+test("gantry#64: a check run API error doesn't skip and doesn't fail the gate", () => {
+  const r = pushRun({ merged: [prInto("main")], checks: "fail" });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.merged_pr, "false");
+  assert.equal(r.outputs.run_node, "true");
+});
+
+test("gantry#64: a green check of another name or from another app doesn't count", () => {
+  assert.equal(pushRun({ merged: [prInto("main")], checks: ciOk("success", "lint") }).outputs.merged_pr, "false");
+  assert.equal(pushRun({ merged: [prInto("main")], checks: ciOk("success", "gantry / ci-ok", "some-app") }).outputs.merged_pr, "false");
+});
+
+test("gantry#64: a caller job named something other than gantry still counts", () => {
+  assert.equal(pushRun({ merged: [prInto("main")], checks: ciOk("success", "ci / ci-ok") }).outputs.merged_pr, "true");
+});
+
+test("gantry#64: the merged-PR lookup failing runs the checks instead of failing the gate", () => {
+  const r = pushRun({ merged: "fail" });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.merged_pr, "false");
+  assert.equal(r.outputs.run_node, "true");
+});
+
+test("gantry#64: a green lookalike ci-ok can't outvote a red one", () => {
+  const checks = { check_runs: [
+    { name: "gantry / ci-ok", conclusion: "failure", app: { slug: "github-actions" } },
+    { name: "deploy / ci-ok", conclusion: "success", app: { slug: "github-actions" } },
+  ] };
+  assert.equal(pushRun({ merged: [prInto("main")], checks }).outputs.merged_pr, "false");
 });
