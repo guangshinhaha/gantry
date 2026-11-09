@@ -38,7 +38,7 @@ case "$*" in
   *"/pulls/"*"/files"*) printf '%s' "$STUB_FILES" | jq -r "$(filter "$@")" ;;
   *"/pulls/"*) printf '%s' "$STUB_PR" | jq -r "$(filter "$@")" ;;
   *"/compare/"*) [ "$STUB_COMPARE" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }; printf '%s' "$STUB_COMPARE" | jq -r "$(filter "$@")" ;;
-  *"/commits/"*"/pulls"*) printf '%s' "$STUB_MERGED" | jq -r "$(filter "$@")" ;;
+  *"/commits/"*"/pulls"*) [ "$STUB_MERGED" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_MERGED" | jq -r "$(filter "$@")" ;;
   *"/commits/"*"/check-runs"*) [ "$STUB_CHECKS" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_CHECKS" | jq -r "$(filter "$@")" ;;
   *"/contents/package.json"*)
     case "$STUB_ROOT" in
@@ -91,7 +91,7 @@ function runGate({
         GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary,
         REPO: "o/r", EVENT: event, PR: "1", SHA: "abc", BEFORE: event === "push" ? "def" : "",
         STUB_FILES: JSON.stringify(files.map(entry)), STUB_PR: JSON.stringify({ changed_files: changed }),
-        STUB_COMPARE: compare === "fail" ? "fail" : JSON.stringify({ files: compare.map(entry) }), STUB_MERGED: JSON.stringify(merged),
+        STUB_COMPARE: compare === "fail" ? "fail" : JSON.stringify({ files: compare.map(entry) }), STUB_MERGED: merged === "fail" ? "fail" : JSON.stringify(merged),
         PUSHED_REF: ref, STUB_CHECKS: checks === "fail" ? "fail" : JSON.stringify(checks),
         NODE_INPUT: node, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
         LANG: "C.UTF-8", RUNNER_TEMP: dir, GITHUB_SERVER_URL: "https://github.com", GH_TOKEN: "t",
@@ -366,4 +366,19 @@ test("gantry#64: a green check of another name or from another app doesn't count
 
 test("gantry#64: a caller job named something other than gantry still counts", () => {
   assert.equal(pushRun({ merged: [prInto("main")], checks: ciOk("success", "ci / ci-ok") }).outputs.merged_pr, "true");
+});
+
+test("gantry#64: the merged-PR lookup failing runs the checks instead of failing the gate", () => {
+  const r = pushRun({ merged: "fail" });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.merged_pr, "false");
+  assert.equal(r.outputs.run_node, "true");
+});
+
+test("gantry#64: a green lookalike ci-ok can't outvote a red one", () => {
+  const checks = { check_runs: [
+    { name: "gantry / ci-ok", conclusion: "failure", app: { slug: "github-actions" } },
+    { name: "deploy / ci-ok", conclusion: "success", app: { slug: "github-actions" } },
+  ] };
+  assert.equal(pushRun({ merged: [prInto("main")], checks }).outputs.merged_pr, "false");
 });

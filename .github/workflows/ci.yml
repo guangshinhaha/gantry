@@ -72,14 +72,16 @@ jobs:
             # Skip only on proof the checks already passed: a PR that merged
             # into this very branch (gantry#63) and whose head had a green
             # ci-ok (gantry#64). A PR merged into another branch says nothing
-            # about this push, and a re-run of a red push must stay red. Any
+            # about this push, and a re-run of a red push must stay red. Every
+            # ci-ok at the head must be green, so a lookalike job can't outvote
+            # a red one. Any
             # doubt, such as an API error or a caller token that can't read
             # checks, runs the checks instead.
             heads=$(gh api "repos/$REPO/commits/$SHA/pulls?per_page=100" \
-              --jq '.[] | select(.merged_at != null and ("refs/heads/" + .base.ref) == env.PUSHED_REF) | .head.sha')
+              --jq '.[] | select(.merged_at != null and ("refs/heads/" + .base.ref) == env.PUSHED_REF) | .head.sha') || heads=""
             for head in $heads; do
               green=$(gh api "repos/$REPO/commits/$head/check-runs?filter=latest&per_page=100" \
-                --jq '[.check_runs[] | select(.app.slug == "github-actions" and (.name | test("(^| / )ci-ok$")) and .conclusion == "success")] | length' 2>/dev/null) || green=0
+                --jq '[.check_runs[] | select(.app.slug == "github-actions" and (.name | test("(^| / )ci-ok$")))] | if length > 0 and all(.[]; .conclusion == "success") then 1 else 0 end' 2>/dev/null) || green=0
               if [ "${green:-0}" -gt 0 ]; then merged_pr=true; echo "Already tested in its PR (ci-ok was green at ${head:0:7})."; break; fi
             done
             if [ "$merged_pr" = false ] && [ -n "$heads" ]; then
