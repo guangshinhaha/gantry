@@ -110,13 +110,20 @@ jobs:
                 echo "Changed-file list is incomplete ($listed of ${changed:-unknown}), so this is not treated as docs-only."
               fi
             elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
-              entries=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" \
-                --jq '.files[] | {f: .filename, p: .previous_filename} | @json') || entries=""
+              cmp=$(gh api "repos/$REPO/compare/$BEFORE...$SHA") || cmp=""
+              entries=$(printf '%s' "$cmp" | jq -r '.files[]? | {f: .filename, p: .previous_filename} | @json') || entries=""
+              cmp_status=$(printf '%s' "$cmp" | jq -r '.status // empty' 2>/dev/null) || cmp_status=""
               listed=$(printf '%s\n' "$entries" | grep -c . || true)
               # The compare API lists at most 300 files and has no next page, so
               # a full list may be cut off (gantry#62).
               files=$(printf '%s\n' "$entries" | jq -r '.f, (.p // empty)')
-              if [ "$listed" -lt 300 ]; then
+              # compare runs from the merge base, so after a force-push it lists
+              # only the commits since the fork and not the code both sides share.
+              # Only a fast-forward (BEFORE is an ancestor of SHA) is a complete
+              # list of what the push changed (gantry#90).
+              if [ "$cmp_status" != ahead ]; then
+                echo "Push is not a fast-forward of ${BEFORE:0:7} (compare says: ${cmp_status:-unknown}), so this is not treated as docs-only."
+              elif [ "$listed" -lt 300 ]; then
                 complete=true
               else
                 echo "Compare lists $listed files, the API's cap, so this is not treated as docs-only."
