@@ -92,7 +92,7 @@ function runGate({
         REPO: "o/r", EVENT: event, PR: "1", SHA: "abc", BEFORE: event === "push" ? "def" : "",
         STUB_FILES: JSON.stringify(files.map(entry)), STUB_PR: JSON.stringify({ changed_files: changed }),
         STUB_COMPARE: compare === "fail" ? "fail" : JSON.stringify({ files: compare.map(entry) }), STUB_MERGED: JSON.stringify(merged),
-        GITHUB_REF: ref, STUB_CHECKS: checks === "fail" ? "fail" : JSON.stringify(checks),
+        PUSHED_REF: ref, STUB_CHECKS: checks === "fail" ? "fail" : JSON.stringify(checks),
         NODE_INPUT: node, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
         LANG: "C.UTF-8", RUNNER_TEMP: dir, GITHUB_SERVER_URL: "https://github.com", GH_TOKEN: "t",
       },

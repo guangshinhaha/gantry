@@ -32,8 +32,9 @@ permissions:
   pull-requests: read
 
 jobs:
-  # Decides which real jobs run. A push to main that is a merged PR skips them
-  # all, because its CI already ran on the pull_request event. A change that only
+  # Decides which real jobs run. A push that is a merged PR skips them all, but
+  # only if the PR merged into the pushed branch and its head had a green ci-ok
+  # (gantry#63, #64); otherwise its CI proves nothing about this push. A change that only
   # touches docs skips everything except the secret scan, because a key can be
   # pasted into a doc. "Only docs" means *.md and docs or images under docs/,
   # counting both names of a rename, and never a file list the API may have cut
@@ -62,14 +63,28 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
+          PUSHED_REF: ${{ github.ref }}
           NODE_INPUT: ${{ inputs.node }}
         run: |
           merged_pr=false
           docs_only=false
           if [ "$EVENT" = push ]; then
-            merged=$(gh api "repos/$REPO/commits/$SHA/pulls" \
-              --jq '[.[] | select(.merged_at != null)] | length')
-            if [ "$merged" -gt 0 ]; then merged_pr=true; echo "Already tested in its PR."; fi
+            # Skip only on proof the checks already passed: a PR that merged
+            # into this very branch (gantry#63) and whose head had a green
+            # ci-ok (gantry#64). A PR merged into another branch says nothing
+            # about this push, and a re-run of a red push must stay red. Any
+            # doubt, such as an API error or a caller token that can't read
+            # checks, runs the checks instead.
+            heads=$(gh api "repos/$REPO/commits/$SHA/pulls?per_page=100" \
+              --jq '.[] | select(.merged_at != null and ("refs/heads/" + .base.ref) == env.PUSHED_REF) | .head.sha')
+            for head in $heads; do
+              green=$(gh api "repos/$REPO/commits/$head/check-runs?filter=latest&per_page=100" \
+                --jq '[.check_runs[] | select(.app.slug == "github-actions" and (.name | test("(^| / )ci-ok$")) and .conclusion == "success")] | length' 2>/dev/null) || green=0
+              if [ "${green:-0}" -gt 0 ]; then merged_pr=true; echo "Already tested in its PR (ci-ok was green at ${head:0:7})."; break; fi
+            done
+            if [ "$merged_pr" = false ] && [ -n "$heads" ]; then
+              echo "A PR merged into this branch, but none had a green ci-ok at its head, so the checks run."
+            fi
           fi
           if [ "$merged_pr" = false ]; then
             # `files` holds every path the change touches that the API listed,

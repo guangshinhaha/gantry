@@ -1,18 +1,24 @@
 name: ci
 # Docs-only changes run only the secret scan inside the shared workflow (not with paths-ignore),
 # so the required `gantry / ci-ok` check still reports.
+# `edited` is the only event GitHub sends when a PR's base changes, and a docs-only
+# green from the old base must not stand (gantry#65). An edit that leaves the base
+# alone (title, body) skips the job, so no new `ci-ok` turns a red head green, and
+# its own concurrency group keeps it from cancelling the PR's real run.
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 # A new push to a PR cancels its run still in flight. Main is never cancelled.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'edited' && !github.event.changes.base && format('-edit-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gantry:
+    if: ${{ github.event.action != 'edited' || github.event.changes.base }}
     uses: guangshinhaha/gantry/.github/workflows/ci.yml@main
     permissions:
       contents: read
