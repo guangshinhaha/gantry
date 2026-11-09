@@ -308,9 +308,11 @@ A high-risk PR shouldn't merge on green CI alone. Opt in by calling
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
 jobs:
   verdict-check:
-    permissions: { contents: read, issues: read, pull-requests: read }
+    permissions: { actions: write, contents: read, issues: read, pull-requests: read }
     uses: guangshinhaha/gantry/.github/workflows/verdict-check.yml@main
     # with:
     #   label: risk:high                              # default
@@ -328,7 +330,8 @@ to the PR's current head. Without the label the check skips.
 - A push moves the head, so it needs a new verdict.
 - A `FAIL` verdict at the head that is newer than every `PASS` at the head fails the check.
 - Only comments from `OWNER`, `MEMBER` or `COLLABORATOR` count. A `pr` field that names another PR is ignored.
-- A comment doesn't trigger the check. After posting a verdict, re-run it (`gh run rerun <id>`).
+- Posting, editing or deleting a comment that mentions `verdict` re-runs the PR's latest run of the calling workflow (if that run is still going, it waits for it first), so the check turns green or red by itself. `gantry-init --verdict-check` adds a caller that does this. The caller must be on the default branch, because comment events run there, and it needs `actions: write` for the re-run. Without `issue_comment` in the caller, re-run by hand (`gh run rerun <id>`).
+- The check still shows its earlier result until the re-run starts, a few seconds after the comment. Don't merge in that gap.
 - It checks that a verdict exists, not that it is right or independent: the author can post their own `PASS` if they hold one of those roles. Who sets the label is up to you.
 
 ## Risky paths
@@ -389,7 +392,7 @@ applies gantry, writes a starting CLAUDE.md, and asks before pushing.
 **Existing repo:**
 
 ```sh
-~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--ac-check]
+~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--ac-check] [--verdict-check]
 git add -A && git commit -m "Add gantry checks"
 ```
 
@@ -408,6 +411,7 @@ and no others, with the repo's local binary. It adds:
 | `.github/gantry-risky-paths` | Example list of risky globs. Edit to fit the repo. |
 | `.github/workflows/review.yml` | Second review by Claude. Only with `--review`. |
 | `.github/workflows/ac-check.yml` | Only with `--ac-check`: calls gantry's acceptance-criteria check. Kept if it already exists. |
+| `.github/workflows/verdict-check.yml` | Only with `--verdict-check`: calls gantry's verdict check, which also re-runs when a verdict comment is posted. Kept if it already exists. It blocks a merge only once `verdict-check / verdict-check` is a required check. |
 | `.github/pull_request_template.md` | PR template: `Closes #`, how I verified. With `--ac-check`, or if the repo already has `ac-check.yml`, it also has an acceptance criteria section. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
 | `.github/workflows/build.yml` | Only with `--docker`: calls gantry's build-and-verify Docker build (no push). |
@@ -453,6 +457,7 @@ scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 risky-paths.mjs: glob matching for needs-human (tests in scripts/test/)
                 ac-check.mjs: parses PR/issue checklists (tests: ac-check.test.mjs)
                 verdict-check.mjs: finds the verdict at a PR's head (tests in scripts/test/)
+                verdict-rerun.mjs: re-runs a PR's verdict-check on a verdict comment (tests in scripts/test/)
                 selftest.mjs: the sandbox self-test that selftest.yml runs
 ```
 

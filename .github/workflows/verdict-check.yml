@@ -3,9 +3,12 @@
 #   on:
 #     pull_request:
 #       types: [opened, reopened, synchronize, labeled, unlabeled]
+#     issue_comment:
+#       types: [created, edited, deleted]
 #   jobs:
 #     verdict-check:
 #       permissions:
+#         actions: write
 #         contents: read
 #         issues: read
 #         pull-requests: read
@@ -20,8 +23,11 @@
 # label skips. Only comments from OWNER, MEMBER or COLLABORATOR count, so a
 # stranger cannot post a PASS. It does not judge whether a verdict is right.
 #
-# A comment does not trigger the check: after posting a verdict, re-run it
-# (`gh run rerun <id>`, or "Re-run jobs" on the PR).
+# A verdict comment (posted, edited or deleted) re-runs the PR's latest run of
+# the calling workflow, so the check turns green or red without a manual
+# re-run. The comment event runs on the default branch, which is why the caller
+# must be on the default branch, and why it needs actions: write. Until the
+# re-run starts (seconds), the check still shows its earlier result.
 name: gantry-verdict-check
 
 on:
@@ -50,7 +56,11 @@ permissions:
 
 jobs:
   verdict-check:
-    if: ${{ github.event.pull_request && contains(github.event.pull_request.labels.*.name, inputs.label) }}
+    if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, inputs.label) }}
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
@@ -65,3 +75,32 @@ jobs:
         run: |
           curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/verdict-check.mjs" -o /tmp/verdict-check.mjs
           node /tmp/verdict-check.mjs
+
+  # A comment run can't report the check itself: it runs on the default branch,
+  # and the required check sits on the PR's head. It re-runs the PR's run instead.
+  # The `verdict` filter skips ordinary comments; an edit is matched on the old
+  # body too, so editing a verdict into prose re-runs. The script re-checks the
+  # author, and the comment body never reaches a shell.
+  rerun:
+    if: >-
+      ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+      (contains(github.event.comment.body, 'verdict') || contains(github.event.changes.body.from, 'verdict')) }}
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    steps:
+      - name: Re-run the PR's verdict check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+          ASSOC: ${{ github.event.comment.author_association }}
+          TRUSTED: ${{ inputs.trusted-associations }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          GANTRY_REF: ${{ inputs.gantry-ref }}
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/verdict-rerun.mjs" -o /tmp/verdict-rerun.mjs
+          node /tmp/verdict-rerun.mjs
