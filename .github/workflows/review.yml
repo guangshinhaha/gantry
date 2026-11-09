@@ -4,7 +4,7 @@
 # Runs on: PR opened / ready_for_review, the `review` label, or an
 # `@claude review` comment (owner/member/collaborator only). Not on every push.
 # Skips itself: drafts, bot PRs, forks (no secrets), and repos without the
-# ANTHROPIC_API_KEY secret.
+# ANTHROPIC_API_KEY secret. Each skip writes "Skipped: <reason>" to the job summary.
 #
 # PDPA: this sends the PR diff to Anthropic. Do not enable on repos whose
 # diffs could contain real student/staff/citizen data.
@@ -53,7 +53,12 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          skip() { echo "run=false" >> "$GITHUB_OUTPUT"; echo "Skipping: $1"; exit 0; }
+          skip() {
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping: $1"
+            echo "Skipped: $1" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
           [ "$HAS_KEY" = "true" ] || skip "no ANTHROPIC_API_KEY secret"
           case "$EVENT" in
             pull_request|pull_request_target)

@@ -5,6 +5,7 @@
 //   PR_BODY=... GH_TOKEN=... REPO=owner/name node scripts/ac-check.mjs
 //   (or pass the PR number as PR=123 to fetch the body instead)
 import { execFileSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const stripNoise = (text) =>
@@ -82,7 +83,9 @@ function main() {
   }
   const r = evaluate(body, issues);
   if (r.status === "skip") {
-    console.log("No linked issue with an Acceptance criteria checklist: nothing to check.");
+    const reason = "no linked issue with an Acceptance criteria checklist, nothing to check";
+    console.log(`Skipped: ${reason}.`);
+    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Skipped: ${reason}\n`);
     return 0;
   }
   for (const w of r.warnings) console.log(`::warning::${w}`);
