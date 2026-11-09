@@ -21,15 +21,37 @@ test("pinCaller points the caller at the sha", () => {
   assert.throws(() => pinCaller("uses: someone/else/ci.yml@main", SHA), /no gantry ci.yml/);
 });
 
-test("the key scenario runs last, alone", () => {
-  assert.deepEqual(all.filter((s) => s.last).map((s) => s.name), ["key"]);
+test("every scenario that plants a key runs last, one at a time", () => {
+  const plants = (s) => s.expect.secrets === "failure";
+  assert.deepEqual(all.filter((s) => s.last).map((s) => s.name), all.filter(plants).map((s) => s.name));
+  assert.ok(all.filter((s) => s.last).length >= 7);
 });
 
-test("docs-only touches only docs, the others touch code", () => {
-  for (const s of all) {
+test("each way of hiding a key from the scan has a scenario that expects red (gantry#68, #69, #84)", () => {
+  for (const name of ["key-allow-comment", "key-own-config", "key-ignore-file", "key-no-diff-attr", "key-evil-merge", "key-in-conflict-resolution"]) {
+    assert.equal(sc(name).expect.secrets, "failure", name);
+    assert.equal(sc(name).expect["ci-ok"], "failure", name);
+  }
+});
+
+test("merges that add no key expect green, so a fix can't buy red with false alarms", () => {
+  for (const name of ["merge-clean", "merge-conflict-resolved"]) {
+    assert.equal(sc(name).expect.secrets, "success", name);
+    assert.ok(!sc(name).last, name);
+  }
+});
+
+test("docs-only touches only docs, the original three others touch code", () => {
+  for (const s of all.filter((x) => ["clean", "failing", "docs-only", "key"].includes(x.name))) {
     const docs = Object.keys(s.files).every((f) => f.startsWith("docs/") || f.endsWith(".md"));
     assert.equal(docs, s.name === "docs-only", s.name);
   }
+});
+
+test("the own-config scenario allowlists its own file, the ignore scenario names its key's commit", () => {
+  assert.match(sc("key-own-config").files[".gitleaks.toml"], /selftest-own-config/);
+  assert.match(sc("key-allow-comment").files["docs/selftest-allow.md"], /gitleaks:allow/);
+  assert.match(sc("key-no-diff-attr").files[".gitattributes"], / -diff$/m);
 });
 
 test("clean and key mix a doc with code; the key sits in docs/", () => {

@@ -1,6 +1,6 @@
 // Self-test: prove a version of gantry's ci.yml still catches what it should.
 //
-//   node scripts/selftest.mjs --gantry-sha <sha> [--sandbox owner/repo]
+//   node scripts/selftest.mjs --gantry-sha <sha> [--sandbox owner/repo] [--only name,name]
 //   node scripts/selftest.mjs --cleanup [--sandbox owner/repo]
 //
 // Opens draft PRs on the sandbox repo whose caller workflow is pinned to
@@ -9,11 +9,15 @@
 //   failing    a failing unit test            node and ci-ok red, at "Unit tests"
 //   docs-only  a docs-only change             secret scan runs, node skipped, green
 //   key        a made-up key in docs/, plus code   secrets and ci-ok red, node green
+//   key-*      a key hidden a way a PR must not be able to (gantry#68, #69, #84):
+//              an inline allow comment, its own .gitleaks.toml or .gitleaksignore,
+//              a `-diff` attribute, a merge commit's own diff. All turn secrets red.
+//   merge-*    merges that add no key (clean, conflict resolved): secrets stay green
 // Exits 1 if any result differs. Needs `gh` signed in with Contents, Pull
 // requests and Workflows write plus Actions read on the sandbox (GH_TOKEN).
 //
-// The key scenario runs last, after the other runs finish, and its branch is
-// deleted straight after. ci.yml scans only a PR's own commits (gantry#36), but
+// Each key scenario runs one at a time after the others finish, and its branch
+// is deleted straight after. ci.yml scans only a PR's own commits (gantry#36), but
 // the sandbox's daily scan and the "holds no key" check see every branch.
 // Every branch sits under selftest/, and --cleanup removes leftovers from a
 // cancelled run. Callers must run one self-test at a time per sandbox.
@@ -74,6 +78,85 @@ export function scenarios(runId, { quotaTest }) {
         "src/selftest.ts": code,
       },
       expect: { gate: "success", secrets: "failure", node: "success", "ci-ok": "failure" },
+    },
+    ...hiddenKeyScenarios(),
+  ];
+}
+
+const KEY_FAILS = { gate: "success", secrets: "failure", "ci-ok": "failure" };
+const keyDoc = (what, key) => `# FAKE key planted by gantry's self-test (${what}). Not a real credential.\n\napi_key = "${key}"\n`;
+
+// Ways to get a key past the scan, each of which must still turn it red, and
+// merges with no key in them, which must stay green.
+function hiddenKeyScenarios() {
+  return [
+    {
+      name: "key-allow-comment",
+      last: true,
+      // gitleaks skips a line that carries its allow comment (gantry#68).
+      files: { "docs/selftest-allow.md": keyDoc("inline allow", fakeKey()).replace(/\n$/, " <!-- gitleaks:allow -->\n") },
+      expect: KEY_FAILS,
+    },
+    {
+      name: "key-own-config",
+      last: true,
+      // gitleaks reads .gitleaks.toml from the checked-out tree (gantry#68, #84).
+      files: {
+        "docs/selftest-own-config.md": keyDoc("own config", fakeKey()),
+        ".gitleaks.toml": '[extend]\nuseDefault = true\n\n[allowlist]\npaths = [\'\'\'docs/selftest-own-config\\.md\'\'\']\n',
+      },
+      expect: KEY_FAILS,
+    },
+    {
+      name: "key-ignore-file",
+      last: true,
+      files: {},
+      // A .gitleaksignore entry for the key's own commit (gantry#68).
+      prepare({ repo, branch }) {
+        const path = "docs/selftest-ignore.md";
+        const added = putFile(repo, branch, path, keyDoc("ignore file", fakeKey()), "test: planted key (do not merge)").commit.sha;
+        putFile(repo, branch, ".gitleaksignore", `${added}:${path}:generic-api-key:3\n`, "test: ignore it (do not merge)");
+      },
+      expect: KEY_FAILS,
+    },
+    {
+      name: "key-no-diff-attr",
+      last: true,
+      // `-diff` makes git show the file as binary, so gitleaks never reads it (gantry#84).
+      files: {
+        ".gitattributes": "docs/selftest-no-diff.md -diff\n",
+        "docs/selftest-no-diff.md": keyDoc("-diff attribute", fakeKey()),
+      },
+      expect: KEY_FAILS,
+    },
+    {
+      name: "key-evil-merge",
+      last: true,
+      // A key that exists only in a merge commit: no parent's diff has it (gantry#69, #84).
+      files: {},
+      prepare: (ctx) => mergeInto(ctx, { evil: { "docs/selftest-evil-merge.md": keyDoc("evil merge", fakeKey()) } }),
+      expect: KEY_FAILS,
+    },
+    {
+      name: "key-in-conflict-resolution",
+      last: true,
+      // The accidental form: the key arrives while resolving a conflict (gantry#69).
+      files: {},
+      prepare: (ctx) => mergeInto(ctx, { conflict: `api_key = "${fakeKey()}"\n` }),
+      expect: KEY_FAILS,
+    },
+    {
+      name: "merge-clean",
+      // A merge that adds nothing of its own must not turn red.
+      files: {},
+      prepare: (ctx) => mergeInto(ctx, {}),
+      expect: { gate: "success", secrets: "success", "ci-ok": "success" },
+    },
+    {
+      name: "merge-conflict-resolved",
+      files: {},
+      prepare: (ctx) => mergeInto(ctx, { conflict: "resolved by hand, no key here\n" }),
+      expect: { gate: "success", secrets: "success", "ci-ok": "success" },
     },
   ];
 }
@@ -138,6 +221,40 @@ function branchSha(repo, branch) {
   return api(repo, `git/ref/heads/${branch}`).object.sha;
 }
 
+// A commit with `files` written over `baseTree`, made through the git data API
+// so it can have any parents. No ref points at it yet.
+function commitTree(repo, parents, baseTree, files, message) {
+  const tree = api(repo, "git/trees", "POST", {
+    base_tree: baseTree,
+    tree: Object.entries(files).map(([path, content]) => ({ path, mode: "100644", type: "blob", content })),
+  }).sha;
+  return api(repo, "git/commits", "POST", { message, tree, parents }).sha;
+}
+const treeOf = (repo, commit) => api(repo, `git/commits/${commit}`).tree.sha;
+
+// Ends `branch` in a merge commit of two sides that each changed a file.
+//   conflict: both sides edit the same line; the merge commit writes this text
+//             there, as a person resolving the conflict would.
+//   evil:     files the merge commit adds that neither side has.
+// With neither, the sides touch different files and the merge adds nothing.
+function mergeInto({ repo, branch }, { conflict, evil = {} }) {
+  const shared = "docs/selftest-merge.md";
+  const other = "docs/selftest-merge-other.md";
+  const ancestor = putFile(repo, branch, shared, "common line\n", "test: common ancestor (do not merge)").commit.sha;
+  const ours = putFile(repo, branch, conflict === undefined ? "docs/selftest-merge-ours.md" : shared, "our change\n", "test: our side (do not merge)").commit.sha;
+  const theirs = commitTree(
+    repo, [ancestor], treeOf(repo, ancestor),
+    conflict === undefined ? { [other]: "their change\n" } : { [shared]: "their change\n" },
+    "test: their side (do not merge)",
+  );
+  const merged = {
+    ...(conflict === undefined ? { [other]: "their change\n" } : { [shared]: conflict }),
+    ...evil,
+  };
+  const merge = commitTree(repo, [ours, theirs], treeOf(repo, ours), merged, "test: merge (do not merge)");
+  api(repo, `git/refs/heads/${branch}`, "PATCH", { sha: merge });
+}
+
 function makeBranch(repo, branch, fromSha) {
   api(repo, "git/refs", "POST", { ref: `refs/heads/${branch}`, sha: fromSha });
 }
@@ -180,6 +297,7 @@ async function runScenario(repo, base, baseSha, sc, runId, sha, log) {
   for (const [path, text] of Object.entries(sc.files)) {
     putFile(repo, branch, path, text, `test: gantry self-test ${sc.name} (do not merge)`);
   }
+  sc.prepare?.({ repo, branch });
   const head = branchSha(repo, branch);
   const pr = gh(["api", "-X", "POST", `repos/${repo}/pulls`, "--input", "-"], {
     title: `selftest ${runId}: ${sc.name} (do not merge)`,
@@ -197,7 +315,7 @@ async function runScenario(repo, base, baseSha, sc, runId, sha, log) {
   }
 }
 
-export async function selfTest({ repo, sha, runId, log = console.log }) {
+export async function selfTest({ repo, sha, runId, only, log = console.log }) {
   const base = `${PREFIX}${runId}/base`;
   const mainSha = branchSha(repo, "main");
   makeBranch(repo, base, mainSha);
@@ -206,7 +324,7 @@ export async function selfTest({ repo, sha, runId, log = console.log }) {
     putFile(repo, base, CALLER, pinCaller(caller.text, sha), `test: pin gantry ci.yml@${sha.slice(0, 7)} (do not merge)`);
     const baseSha = branchSha(repo, base);
     const quotaTest = readFile(repo, "src/quota.test.ts", base).text;
-    const all = scenarios(runId, { quotaTest });
+    const all = scenarios(runId, { quotaTest }).filter((s) => !only || only.includes(s.name));
     const go = (sc) => runScenario(repo, base, baseSha, sc, runId, sha, log);
     const results = await Promise.all(all.filter((s) => !s.last).map(go));
     for (const sc of all.filter((s) => s.last)) results.push(await go(sc));
@@ -243,7 +361,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const runId = process.env.GITHUB_RUN_ID
       ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT || 1}`
       : `local-${Date.now()}`;
-    const results = await selfTest({ repo, sha, runId });
+    const results = await selfTest({ repo, sha, runId, only: arg("--only")?.split(",") });
     const md = report(results, sha);
     console.log(md);
     if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, md + "\n");
