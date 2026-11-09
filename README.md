@@ -439,8 +439,12 @@ jobs:
   the PR stops matching, until a person removes it. If the job fails,
   verdict-check fails with it (`risk-label-result`), so a missed label never
   passes as a skip.
-- **Same-repo PRs only.** A fork PR's token is read-only, so the job skips and
-  the PR is not labelled.
+- **Fork PRs.** A fork PR's token is read-only, so it can't be labelled. If it
+  touches a High-risk path the job fails; a maintainer adds the label by hand.
+- **One label name.** If you set `label:` on verdict-check, pass the same `label:`
+  to `risk-label`.
+- **Big PRs.** A PR of 3000+ files (the API's cap) is labelled, since the file
+  list may be cut short.
 - The `verdict-check / verdict-check` job now runs on every PR and skips inside
   the script when there is no label, instead of being skipped by the workflow.
 

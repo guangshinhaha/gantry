@@ -30,9 +30,9 @@ test("verdict-check does not trust the event payload's labels, which predate ris
   assert.doesNotMatch(jobIf, /labels/);
 });
 
-test("verdict-check fails when risk-label failed, so a missed label can't pass as a skip", () => {
+test("verdict-check fails when risk-label failed or was cancelled, so a missed label can't pass as a skip", () => {
   const wf = read(".github/workflows/verdict-check.yml");
-  assert.match(wf, /if: \$\{\{ inputs\.risk-label-result == 'failure' \}\}\n\s+run: \|\n[^]*?exit 1/);
+  assert.match(wf, /if: \$\{\{ contains\(fromJSON\('\["failure","cancelled"\]'\), inputs\.risk-label-result\) \}\}\n\s+run: \|\n[^]*?exit 1/);
 });
 
 test("risk-label only adds the label: it never removes one a person set", () => {
@@ -44,4 +44,15 @@ test("risk-label only adds the label: it never removes one a person set", () => 
 test("risk-label reads the repo's list from the base commit", () => {
   const wf = read(".github/workflows/risk-label.yml");
   assert.match(wf, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+});
+
+test("risk-label fails a fork PR that touches a High-risk path instead of passing it unlabelled", () => {
+  const wf = read(".github/workflows/risk-label.yml");
+  assert.match(wf, /if \[ "\$FORK" = "true" \]; then\n[^]*?exit 1/);
+  assert.doesNotMatch(wf, /Skipped: fork/);
+});
+
+test("risk-label keeps a label the repo already customised", () => {
+  const wf = read(".github/workflows/risk-label.yml");
+  assert.doesNotMatch(wf, /label create[^\n]*--force/);
 });

@@ -1,0 +1,4 @@
+# gantry's own High-risk paths, on top of the defaults: the files that decide what is High-risk.
+.github/gantry-high-risk-paths
+scripts/high-risk-paths.mjs
+scripts/risky-paths.mjs

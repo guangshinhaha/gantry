@@ -48,7 +48,7 @@ on:
         type: string
         default: risk:high
       risk-label-result:
-        description: needs.risk-label.result from the caller's risk-label job; `failure` fails this check, so a failed labelling can't let a High-risk PR through
+        description: needs.risk-label.result from the caller's risk-label job; `failure` or `cancelled` fails this check, so a failed labelling can't let a High-risk PR through
         type: string
         default: ""
       trusted-associations:
@@ -75,7 +75,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Fail if risk labelling failed
-        if: ${{ inputs.risk-label-result == 'failure' }}
+        if: ${{ contains(fromJSON('["failure","cancelled"]'), inputs.risk-label-result) }}
         run: |
           echo "::error::The risk-label job failed, so this PR may be missing its \`risk:high\` label. Re-run the workflow."
           exit 1
