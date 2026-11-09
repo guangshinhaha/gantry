@@ -55,7 +55,7 @@ on:
         description: Paths to scan, space or newline separated, relative to the preview URL
         type: string
         default: /
-      lighthouse-min-a11y:
+      lighthouse-min-a11y-x:
         description: Fail the job when any scanned URL's accessibility score (0-100) is below this. Empty means report only.
         type: string
         default: ""
