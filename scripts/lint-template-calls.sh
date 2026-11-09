@@ -6,8 +6,9 @@
 # workflows, repoints them at ./.github/workflows/X.yml, and lets actionlint
 # check each call. Options left commented out are checked too when the comment
 # block starts with a `# gantry:optional` line: the block is uncommented in the
-# scratch copy, as a repo would when it turns the options on. Prose comments
-# elsewhere are left alone.
+# scratch copy, as a repo would when it turns the options on. The block ends at
+# the first line that isn't a comment, so a blank line before any prose comment
+# keeps it out.
 # Errors are reported against the template/ path, as GitHub annotations.
 set -eu
 

@@ -63,9 +63,10 @@ test("a commented-out optional input the shared workflow dropped fails", { skip 
   }
 });
 
-test("prose comments after the marker block are not uncommented", { skip }, () => {
-  const r = run((d) =>
-    sub(d, "template/.github/workflows/ci.yml", "jobs:\n", "# this is: prose, not an input\njobs:\n"),
-  );
+test("a blank line ends the marker block: prose after it is not uncommented", { skip }, () => {
+  const r = run((d) => {
+    const p = join(d, "template/.github/workflows/ci.yml");
+    writeFileSync(p, readFileSync(p, "utf8") + "\n# note: prose, not an input\n");
+  });
   assert.equal(r.status, 0, r.stdout + r.stderr);
 });

@@ -2,7 +2,8 @@
 # Validates the hook YAML with lefthook itself, which rejects duplicate keys
 # (yq accepts them). Checks every hooks/*.yml, template/lefthook.yml as
 # committed, and template/lefthook.yml with its commented `# - hooks/x.yml`
-# lines turned on, the form gantry-init leaves behind. Also checks that each
+# lines turned on (syntax only: lefthook doesn't fetch the remote here, so
+# configs aren't merged). Also checks that each
 # `configs:` path, live or commented, exists under hooks/.
 set -eu
 
