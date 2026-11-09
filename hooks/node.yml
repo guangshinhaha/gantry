@@ -37,3 +37,8 @@ pre-push:
         if [ -f pnpm-lock.yaml ]; then pnpm audit --audit-level high --prod
         elif [ -f package-lock.json ]; then npm audit --audit-level=high --omit=dev
         fi
+
+pre-commit:
+  parallel: true
+pre-commit:
+  parallel: false
