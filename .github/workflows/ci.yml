@@ -261,7 +261,7 @@ jobs:
       # resolving a conflict, or in an evil merge, is seen, and a clean merge
       # adds nothing (gantry#69, #84). --text makes git diff a file even when
       # it looks binary (a NUL byte, or `-diff`), which would hide it from
-      # gitleaks. It costs time on a PR that adds big binaries (about 0.5s per MB),
+      # gitleaks. It costs time on a PR that adds big binaries (27s for 54MB in the case behind gantry#104),
       # and that is kept on purpose (gantry#104): skipping binary extensions or
       # capping size would let a key hide in a file named x.zip or padded past
       # the cap, and no extension or size check tells a real image from one. That needs git 2.40, which also sets GIT_ATTR_SOURCE: the
@@ -338,8 +338,11 @@ jobs:
                    | .[] | select(.state == "APPROVED" and .commit_id == $head and .user.login != $author) | .user.login' 2>"$errf"); then
                 lookup_error="could not read the PR's reviews: $(tr '\n' ' ' < "$errf")"
               else
-                for login in $candidates; do
-                  if perm=$(gh api "repos/$REPO/collaborators/$login/permission" --jq .permission 2>"$errf"); then
+                # Read line by line: an unquoted loop would glob a login like
+                # `dependabot[bot]` against the PR's own filenames.
+                while IFS= read -r login; do
+                  [ -n "$login" ] || continue
+                  if perm=$(gh api "repos/$REPO/collaborators/$login/permission" --jq .permission 2>"$errf" </dev/null); then
                     case "$perm" in admin|write) approvers+="${approvers:+ }$login" ;; esac
                   elif ! grep -q 'HTTP 404' "$errf"; then
                     # 404 means not a collaborator: not an approver. Anything
@@ -347,7 +350,7 @@ jobs:
                     lookup_error="could not read $login's permission: $(tr '\n' ' ' < "$errf")"
                     break
                   fi
-                done
+                done <<< "$candidates"
               fi
             fi
             if [ "${#reasons[@]}" -gt 0 ] && [ -z "$lookup_error" ] && [ -n "$approvers" ]; then

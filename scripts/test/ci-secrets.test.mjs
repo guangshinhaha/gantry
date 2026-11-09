@@ -597,6 +597,20 @@ real("one approver with write permission is enough when another has only read", 
   assert.doesNotMatch(r.out, /eve approved/);
 });
 
+real("a bot login isn't globbed against the PR's filenames to borrow another user's permission", () => {
+  const f = realPr({ build: (repo) => { ALLOW_COMMENT(repo); put(repo, { dependabotb: "x\n" }, "a file named like the glob"); } });
+  const r = realScan(f, [review("dependabot[bot]", "APPROVED", f.head)], { perms: { "dependabot[bot]": "read", dependabotb: "admin" } });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /override needs a person/);
+});
+
+real("a failed lookup for one approver fails the step even when another approver already counted", () => {
+  const f = realPr({ build: ALLOW_COMMENT });
+  const r = realScan(f, [review("abe", "APPROVED", f.head), review("bob", "APPROVED", f.head)], { perms: { bob: "HTTP 500 Server Error" } });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /could not read bob's permission/);
+});
+
 real("a failed reviews lookup fails with the 'needs a person' message and gh's error (gantry#104)", () => {
   const f = realPr({ build: ALLOW_COMMENT });
   const r = realScan(f, [review("bob", "APPROVED", f.head)], { reviewsFail: "1" });
