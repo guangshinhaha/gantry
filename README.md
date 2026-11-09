@@ -413,6 +413,7 @@ though the same key is flagged in that shape:
 - a key in a Markdown table, in prose (`The staging API key is ...`) or in bold
   (`**API key:** ...`);
 - a file saved as UTF-16, which git treats as binary;
+- a file under a path gitleaks' default rules skip, such as lock files, `node_modules`, `go.sum` and `.svg`;
 - a key with low entropy: about 1 in 6 random 32-character hex keys pass.
 
 Treat a green scan as "no key in a form gitleaks knows", not "no key".
@@ -440,8 +441,8 @@ A repo with one person has no approver. Land such a change with a direct push.
 
 **Needs.** git 2.40 or newer (older fails the job with a message), and `gh`
 and `jq` on the runner (GitHub-hosted runners have both). A base
-`.gitleaks.toml` must be self-contained: it can say `[extend] useDefault = true`
-but not extend a file by relative path.
+`.gitleaks.toml` may extend a file by relative path (`[extend] path`); the scan
+then reads that file from the base, not from the PR.
 
 ## Risky paths
 

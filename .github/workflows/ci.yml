@@ -252,9 +252,10 @@ jobs:
       # Merge commits are scanned for what they changed relative to their
       # parents' automatic merge (--diff-merges=remerge), so a key added while
       # resolving a conflict, or in an evil merge, is seen, and a clean merge
-      # adds nothing (gantry#69, #84). That needs git 2.40, which also sets
-      # GIT_ATTR_SOURCE: the scan reads the base's .gitattributes, so a PR's
-      # `-diff` can't make git hide a file from gitleaks (gantry#84).
+      # adds nothing (gantry#69, #84). --text makes git diff a file even when
+      # it looks binary (a NUL byte, or `-diff`), which would hide it from
+      # gitleaks. That needs git 2.40, which also sets GIT_ATTR_SOURCE: the
+      # scan reads the base's .gitattributes (gantry#84).
       # A PR can't loosen the scan for itself (gantry#68, #84): it runs with the
       # base's .gitleaks.toml and .gitleaksignore (the default rules if the base
       # has none), never the PR's, and `gitleaks:allow` comments are ignored. A PR that touches either file, or adds a
@@ -299,11 +300,13 @@ jobs:
           echo "Secret scan: $count commit(s) in $range" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
           reasons=()
+          src=$PWD
+          run_dir=$PWD
           if [ "$pr" = true ]; then
             export GIT_ATTR_SOURCE=$base
             changed=$(git log --no-renames --name-only --format= --diff-merges=remerge "$range" \
               | grep -E '(^|/)\.gitleaks(\.toml|ignore)$' | sort -u || true)
-            allowed=$(git log -p -U0 --no-renames --format= --diff-merges=remerge "$range" \
+            allowed=$(git log -p -U0 --format= --diff-merges=remerge "$range" \
               | awk '/^\+\+\+ /{f=substr($0,7); next} /^\+/ && index($0,"gitleaks:allow"){print f}' | sort -u)
             if [ -n "$changed" ]; then reasons+=("changes the scan's config ($(echo $changed))"); fi
             if [ -n "$allowed" ]; then reasons+=("adds gitleaks:allow ($(echo $allowed))"); fi
@@ -329,11 +332,19 @@ jobs:
               rm -f .gitleaksignore
               if git cat-file -e "$base:.gitleaksignore" 2>/dev/null; then git show "$base:.gitleaksignore" > .gitleaksignore; fi
               scan+=(--config "$cfg/gitleaks.toml" --ignore-gitleaks-allow)
+              # A relative `[extend] path` resolves from the working directory,
+              # so run from a copy of the base tree: the PR can't edit the
+              # file the base config extends.
+              if awk '{ sub(/#.*/, ""); gsub(/[ \t]/, "") } /^\[/ { t = $0 } t == "[extend]" && /^path=/ { f = 1 } END { exit !f }' "$cfg/gitleaks.toml"; then
+                mkdir "$cfg/base-tree"
+                git archive "$base" | tar -x -C "$cfg/base-tree"
+                run_dir="$cfg/base-tree"
+              fi
             fi
           fi
 
           rc=0
-          gitleaks detect "${scan[@]}" --log-opts="$range --diff-merges=remerge" || rc=$?
+          (cd "$run_dir" && gitleaks detect "${scan[@]}" --source "$src" --log-opts="$range --diff-merges=remerge --text") || rc=$?
           if [ "${#reasons[@]}" -gt 0 ]; then
             why=$(printf '%s; and ' "${reasons[@]}")
             msg="Secret scan override needs a person: this PR ${why%; and }. A person with write access, other than the PR's author, must approve the PR at its current head ($PR_HEAD), then re-run this job. Until then the scan runs with the base branch's config and ignore file."

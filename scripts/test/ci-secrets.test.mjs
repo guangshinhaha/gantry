@@ -303,7 +303,7 @@ for (const [why, before] of [["a new branch", "000000000000000000000000000000000
     // A clean commit, while main's history and \`other\` both hold a key.
     git(f.repo, "checkout", "-q", "--detach", f.init);
     const clean = scan(f, { EVENT: "push", BEFORE: before, SHA: f.init });
-    assert.match(clean.out, /log-opts: HEAD --diff-merges=remerge$/m);
+    assert.match(clean.out, /log-opts: HEAD --diff-merges=remerge --text$/m);
     assert.equal(clean.status, 0, clean.out);
     // Its own history is still scanned: main's old key fails it.
     git(f.repo, "checkout", "-q", "main");
@@ -315,7 +315,7 @@ test("any other event scans the checked-out commit's history only", () => {
   const f = fixture();
   git(f.repo, "checkout", "-q", "--detach", f.init);
   const r = scan(f, { EVENT: "workflow_dispatch", SHA: f.init });
-  assert.match(r.out, /log-opts: HEAD --diff-merges=remerge$/m);
+  assert.match(r.out, /log-opts: HEAD --diff-merges=remerge --text$/m);
   assert.equal(r.status, 0, r.out);
 });
 
@@ -442,6 +442,13 @@ real("a PR's `-diff` attribute can't hide a file from the scan (gantry#84)", () 
   assert.match(r.out, /leaks found: 1/);
 });
 
+real("a NUL byte can't make git treat a file as binary and hide its key", () => {
+  const f = realPr({ build: (repo) => put(repo, { "docs/k.txt": `\0\n${keyLine()}` }, "nul") });
+  const r = realScan(f);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /leaks found: 1/);
+});
+
 real("a PR's own .gitleaks.toml can't allowlist its key, and the PR is flagged for a person (gantry#68, #84)", () => {
   const f = realPr({ build: (repo) => put(repo, { "docs/k.md": keyLine(), ".gitleaks.toml": allowlist("docs/k\\.md") }, "allow it") });
   const r = realScan(f);
@@ -449,6 +456,26 @@ real("a PR's own .gitleaks.toml can't allowlist its key, and the PR is flagged f
   assert.match(r.out, /leaks found: 1/, "the scan used the base's rules, not the PR's");
   assert.match(r.out, /changes the scan's config \(\.gitleaks\.toml\)/);
   assert.match(r.out, /must approve the PR at its current head/);
+});
+
+real("a PR can't edit a file the base .gitleaks.toml extends by path", () => {
+  const baseFiles = { ".gitleaks.toml": '[extend]\npath = "rules.toml"\n', "rules.toml": "[extend]\nuseDefault = true\n" };
+  const f = realPr({ baseFiles, build: (repo) => put(repo, { "rules.toml": allowlist("k\\.txt"), "k.txt": keyLine() }, "allow it") });
+  const r = realScan(f);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /leaks found: 1/);
+  // And a clean PR on the same base stays green.
+  const g = realPr({ baseFiles, build: (repo) => put(repo, { "docs/a.md": "docs\n" }, "docs") });
+  assert.equal(realScan(g).status, 0);
+});
+
+real("moving a file that already says gitleaks:allow isn't adding it", () => {
+  const f = realPr({
+    baseFiles: { "docs/guide.md": "use // gitleaks:allow to mute\n" },
+    build: (repo) => { mkdirSync(join(repo, "guides")); git(repo, "mv", "docs/guide.md", "guides/guide.md"); git(repo, "commit", "-q", "-m", "move"); },
+  });
+  const r = realScan(f);
+  assert.equal(r.status, 0, r.out);
 });
 
 real("a PR's own .gitleaksignore can't ignore its key, and the PR is flagged (gantry#68)", () => {
