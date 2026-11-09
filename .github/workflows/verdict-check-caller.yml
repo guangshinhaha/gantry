@@ -1,0 +1,19 @@
+name: verdict-check-caller
+# gantry calls its own verdict-check, so a labelled risk:high PR needs a verifier's
+# verdict at its head. The required check is `verdict-check / verdict-check`.
+# Local ref: a PR event runs the PR's own verdict-check.yml, and a comment only
+# triggers a re-run of that PR run (the comment run itself uses main's copy).
+# (Named -caller because verdict-check.yml here is the shared workflow itself.)
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
+jobs:
+  verdict-check:
+    uses: ./.github/workflows/verdict-check.yml
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      pull-requests: read
