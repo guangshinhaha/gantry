@@ -37,8 +37,8 @@ test("verdict-check fails when risk-label failed or was cancelled, so a missed l
 
 test("risk-label only adds the label: it never removes one a person set", () => {
   const wf = read(".github/workflows/risk-label.yml");
-  assert.match(wf, /--add-label/);
-  assert.doesNotMatch(wf, /--remove-label/);
+  assert.match(wf, /issues\/\$PR\/labels/);
+  assert.doesNotMatch(wf, /--remove-label|-X DELETE/);
 });
 
 test("risk-label reads the repo's list from the base commit", () => {
@@ -48,7 +48,7 @@ test("risk-label reads the repo's list from the base commit", () => {
 
 test("risk-label fails a fork PR that touches a High-risk path instead of passing it unlabelled", () => {
   const wf = read(".github/workflows/risk-label.yml");
-  assert.match(wf, /if \[ "\$FORK" = "true" \]; then\n[^]*?exit 1/);
+  assert.match(wf, /if \[ "\$READONLY" = "true" \]; then\n[^]*?exit 1/);
   assert.doesNotMatch(wf, /Skipped: fork/);
 });
 

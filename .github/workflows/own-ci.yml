@@ -82,3 +82,9 @@ jobs:
       - name: node --test
         if: ${{ !cancelled() }}
         run: node --test
+
+      # risk-label downloads its matching scripts at a pinned sha. A PR that edits
+      # them can't know its own sha, so this checks after merge and flags a stale pin.
+      - name: risk-label pin is current
+        if: ${{ github.event_name == 'push' && !cancelled() }}
+        run: node scripts/check-risk-label-pin.mjs

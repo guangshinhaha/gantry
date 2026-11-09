@@ -443,20 +443,28 @@ jobs:
   labels (a label added with the workflow token starts no new run, and the event
   payload predates it). A caller without the `risk-label` job works as before.
 - **It only adds.** A label a person set stays, and so does one added here after
-  the PR stops matching, until a person removes it. If the job fails,
+  the PR stops matching, until a person removes it. Removing it doesn't re-run the
+  labelling (the `unlabeled` event for that label is skipped). If the job fails,
   verdict-check fails with it (`risk-label-result`), so a missed label never
   passes as a skip.
-- **Fork PRs.** A fork PR's token is read-only, so it can't be labelled. If it
-  touches a High-risk path the job fails; a maintainer adds the label by hand.
+- **Fork and Dependabot PRs.** Their token is read-only (Dependabot's even on a
+  same-repo branch), so they can't be labelled. If one touches a High-risk path the
+  job fails until a maintainer adds the label by hand; once it is there, the job
+  passes.
 - **Pinned scripts.** The matching scripts run with a write token, so
   `risk-label` downloads them at `gantry-ref`, which must be a full 40-character
   commit sha (a branch or tag name is refused). The default is a pinned sha,
-  bumped when the scripts change. gantry's own caller passes the PR's base sha,
+  bumped when the scripts change; gantry's own CI runs
+  `scripts/check-risk-label-pin.mjs` on the default branch and fails when the pin
+  is behind. gantry's own caller passes the PR's base sha,
   so a PR that edits the matcher is labelled by the old one.
 - **One label name.** If you set `label:` on verdict-check, pass the same `label:`
   to `risk-label`.
-- **Big PRs.** A PR of 3000+ files (the API's cap) is labelled, since the file
-  list may be cut short.
+- **Big PRs.** A PR of 3000+ files (the API's cap; renames count once) is
+  labelled, since the file list may be cut short.
+- **Errors show.** A failed label create is ignored only if the label exists
+  afterwards; any other failure fails the job. The label is added through the REST labels
+  endpoint, which the workflow token accepts.
 - The `verdict-check / verdict-check` job now runs on every PR and skips inside
   the script when there is no label, instead of being skipped by the workflow.
 
@@ -627,6 +635,7 @@ scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 lighthouse-report.mjs: turns Lighthouse results into the PR comment section
                 risky-paths.mjs: glob matching for needs-human (tests in scripts/test/)
                 high-risk-paths.mjs: default and per-repo High-risk globs for risk:high
+                check-risk-label-pin.mjs: flags a stale default gantry-ref in risk-label.yml
                 ac-check.mjs: parses PR/issue checklists (tests: ac-check.test.mjs)
                 verdict-check.mjs: finds the verdict at a PR's head (tests in scripts/test/)
                 verdict-rerun.mjs: re-runs a PR's verdict-check on a verdict comment (tests in scripts/test/)
