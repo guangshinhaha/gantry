@@ -49,3 +49,24 @@ test("a shared-workflow call that isn't repointed fails", { skip }, () => {
   assert.notEqual(r.status, 0);
   assert.match(r.stdout, /file=template\/\.github\/workflows\/ci\.yml,line=\d+::uses: is not/);
 });
+
+test("a commented-out optional input the shared workflow dropped fails", { skip }, () => {
+  for (const [file, shared, input] of [
+    ["ci.yml", "ci.yml", "e2e"],
+    ["ci.yml", "ci.yml", "runs-on"],
+    ["preview.yml", "preview.yml", "lighthouse-min-a11y"],
+    ["secrets-scan.yml", "secrets-scan.yml", "runs-on"],
+  ]) {
+    const r = run((d) => sub(d, `.github/workflows/${shared}`, `\n      ${input}:`, `\n      ${input}-x:`));
+    assert.notEqual(r.status, 0, `${file} ${input}`);
+    assert.match(r.stdout, new RegExp(`file=template/\\.github/workflows/${file},line=\\d+.*input "${input}" is not defined`));
+  }
+});
+
+test("a blank line ends the marker block: prose after it is not uncommented", { skip }, () => {
+  const r = run((d) => {
+    const p = join(d, "template/.github/workflows/ci.yml");
+    writeFileSync(p, readFileSync(p, "utf8") + "\n# note: prose, not an input\n");
+  });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+});

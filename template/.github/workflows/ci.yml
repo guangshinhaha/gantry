@@ -17,6 +17,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    # gantry:optional
     # with:
     #   runs-on: '["self-hosted","gantry"]'   # once your runner is up
     #   e2e: true
