@@ -249,16 +249,41 @@ jobs:
       #   push: the pushed commits. A new branch, or a `before` this clone
       #     doesn't have, scans the pushed commit's whole history instead.
       #   any other event: the checked-out commit's whole history.
+      # Merge commits are scanned for what they changed relative to their
+      # parents' automatic merge (--diff-merges=remerge), so a key added while
+      # resolving a conflict, or in an evil merge, is seen, and a clean merge
+      # adds nothing (gantry#69, #84). That needs git 2.40, which also sets
+      # GIT_ATTR_SOURCE: the scan reads the base's .gitattributes, so a PR's
+      # `-diff` can't make git hide a file from gitleaks (gantry#84).
+      # A PR can't loosen the scan for itself (gantry#68, #84): it runs with the
+      # base's .gitleaks.toml and .gitleaksignore (the default rules if the base
+      # has none), never the PR's, and `gitleaks:allow` comments are ignored. A PR that touches either file, or adds a
+      # line with `gitleaks:allow`, fails this step until a person with write
+      # access other than the PR's author approves it at its current head and
+      # the job is re-run. Once approved, the PR's own config and ignore file
+      # apply, which is how a real false positive gets allowlisted.
       - name: gitleaks
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
         run: |
+          read -r git_major git_minor <<< "$(git version | sed -E 's/[^0-9]*([0-9]+)\.([0-9]+).*/\1 \2/')"
+          if [ "$git_major" -lt 2 ] || { [ "$git_major" -eq 2 ] && [ "$git_minor" -lt 40 ]; }; then
+            echo "::error::Secret scan not run: git $git_major.$git_minor is too old. The scan needs git 2.40 or newer to read merge commits and the base's .gitattributes."
+            exit 1
+          fi
+          scan=(--redact --verbose)
+          pr=false
           if [ "$EVENT" = pull_request ] && [ -n "$PR_HEAD" ]; then
+            pr=true
             base=$PR_BASE
             if [ "$(git rev-parse -q --verify 'HEAD^2' || true)" = "$PR_HEAD" ]; then
               base=$(git rev-parse 'HEAD^1')
@@ -272,7 +297,51 @@ jobs:
           fi
           count=$(git rev-list --count "$range")
           echo "Secret scan: $count commit(s) in $range" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
-          gitleaks detect --redact --verbose --log-opts="$range"
+
+          reasons=()
+          if [ "$pr" = true ]; then
+            export GIT_ATTR_SOURCE=$base
+            changed=$(git log --no-renames --name-only --format= --diff-merges=remerge "$range" \
+              | grep -E '(^|/)\.gitleaks(\.toml|ignore)$' | sort -u || true)
+            allowed=$(git log -p -U0 --no-renames --format= --diff-merges=remerge "$range" \
+              | awk '/^\+\+\+ /{f=substr($0,7); next} /^\+/ && index($0,"gitleaks:allow"){print f}' | sort -u)
+            if [ -n "$changed" ]; then reasons+=("changes the scan's config ($(echo $changed))"); fi
+            if [ -n "$allowed" ]; then reasons+=("adds gitleaks:allow ($(echo $allowed))"); fi
+            approvers=""
+            if [ "${#reasons[@]}" -gt 0 ]; then
+              approvers=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
+                | jq -rs --arg head "$PR_HEAD" --arg author "$PR_AUTHOR" \
+                  'add // [] | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))
+                   | group_by(.user.login) | map(last)
+                   | .[] | select(.state == "APPROVED" and .commit_id == $head and .user.login != $author
+                       and (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))) | .user.login')
+            fi
+            if [ "${#reasons[@]}" -gt 0 ] && [ -n "$approvers" ]; then
+              echo "::notice::This PR changes what the secret scan accepts, and $(echo $approvers) approved it at $PR_HEAD: its own config applies."
+              echo "Secret scan override approved by $(echo $approvers)." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+              reasons=()
+            else
+              cfg=$(mktemp -d "${RUNNER_TEMP:-/tmp}/gitleaks-config.XXXXXX")
+              if git cat-file -e "$base:.gitleaks.toml" 2>/dev/null; then git show "$base:.gitleaks.toml" > "$cfg/gitleaks.toml"
+              else printf '[extend]\nuseDefault = true\n' > "$cfg/gitleaks.toml"; fi
+              # gitleaks reads .gitleaksignore from the checkout whatever
+              # --gitleaks-ignore-path says, so put the base's there (or none).
+              rm -f .gitleaksignore
+              if git cat-file -e "$base:.gitleaksignore" 2>/dev/null; then git show "$base:.gitleaksignore" > .gitleaksignore; fi
+              scan+=(--config "$cfg/gitleaks.toml" --ignore-gitleaks-allow)
+            fi
+          fi
+
+          rc=0
+          gitleaks detect "${scan[@]}" --log-opts="$range --diff-merges=remerge" || rc=$?
+          if [ "${#reasons[@]}" -gt 0 ]; then
+            why=$(printf '%s; and ' "${reasons[@]}")
+            msg="Secret scan override needs a person: this PR ${why%; and }. A person with write access, other than the PR's author, must approve the PR at its current head ($PR_HEAD), then re-run this job. Until then the scan runs with the base branch's config and ignore file."
+            echo "::error::$msg"
+            echo "$msg" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 1
+          fi
+          exit "$rc"
 
   node:
     # Node/TS repos only: gate skips this job for a repo with no package.json.
