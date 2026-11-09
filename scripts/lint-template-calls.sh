@@ -4,7 +4,10 @@
 # guangshinhaha/gantry/.github/workflows/X.yml@main, which actionlint can't
 # read, so this copies them into a scratch repo next to this checkout's shared
 # workflows, repoints them at ./.github/workflows/X.yml, and lets actionlint
-# check each call. Options left commented out in a template are not checked.
+# check each call. Options left commented out are checked too when the comment
+# block starts with a `# gantry:optional` line: the block is uncommented in the
+# scratch copy, as a repo would when it turns the options on. Prose comments
+# elsewhere are left alone.
 # Errors are reported against the template/ path, as GitHub annotations.
 set -eu
 
@@ -21,7 +24,13 @@ status=0
 for f in "$root"/template/.github/workflows/*.yml "$root"/template/.github/workflows/*.yaml; do
   [ -e "$f" ] || continue
   out="$tmp/.github/workflows/caller-$(basename "$f")"
-  sed -E 's#guangshinhaha/gantry/(\.github/workflows/[^@ "]+)@[^ "'"'"']+#./\1#' "$f" > "$out"
+  # The marker line becomes a blank line so line numbers still match the template.
+  awk '
+    /^[ \t]*# gantry:optional[ \t]*$/ { on = 1; print ""; next }
+    on && /^[ \t]*#/ { sub(/# ?/, ""); print; next }
+    { on = 0; print }
+  ' "$f" |
+    sed -E 's#guangshinhaha/gantry/(\.github/workflows/[^@ "]+)@[^ "'"'"']+#./\1#' > "$out"
   # A shared-workflow call this didn't repoint is remote, so actionlint can't
   # check it. Fail rather than pass it unchecked.
   if grep -nE '^[^#]*uses: *["'"'"']?[^."'"'"' ][^ ]*/\.github/workflows/' "$out" > "$tmp/remote"; then

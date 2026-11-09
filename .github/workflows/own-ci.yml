@@ -23,6 +23,12 @@ jobs:
         with:
           node-version: "22"
 
+      # Pinned: the hook YAML check below depends on lefthook rejecting duplicate keys.
+      - name: Install lefthook
+        run: |
+          npm install --global lefthook@2.2.2
+          lefthook version
+
       - name: Install actionlint
         run: |
           version=1.7.12
@@ -54,17 +60,11 @@ jobs:
         run: sh scripts/lint-template-calls.sh
 
       # lefthook reads hooks/*.yml from gantry@main in every repo, and
-      # gantry-init copies template/lefthook.yml. Nothing else parses them here.
+      # gantry-init copies template/lefthook.yml. lefthook itself validates
+      # them: yq accepts duplicate keys, lefthook rejects them.
       - name: Hook YAML parses
         if: ${{ !cancelled() }}
-        run: |
-          yq --version
-          fail=0
-          for f in hooks/*.yml hooks/*.yaml template/lefthook.yml; do
-            [ -e "$f" ] || continue
-            yq '.' "$f" > /dev/null || { echo "::error file=$f::invalid YAML"; fail=1; }
-          done
-          exit "$fail"
+        run: sh scripts/lint-hooks.sh
 
       # Runs even when an earlier check fails, so one push shows every result.
       # node --test alone misses a syntax error in code the tests don't reach:
@@ -76,6 +76,7 @@ jobs:
           sh -n bin/gantry-init
           sh -n bin/gantry-protect
           sh -n scripts/lint-template-calls.sh
+          sh -n scripts/lint-hooks.sh
           for f in scripts/*.mjs bin/*.mjs; do node --check "$f"; done
 
       - name: node --test
