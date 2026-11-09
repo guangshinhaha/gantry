@@ -22,9 +22,11 @@ export function workflowPath(ref) {
 }
 
 /** The newest pull_request run of `path` at `headSha`, or undefined. */
-export function pickRun(runs, { headSha, path }) {
+export function pickRun(runs, { headSha, path, pr }) {
+  // Two PRs can share a head; a run that lists its PRs must list this one.
+  const ofPr = (r) => !r.pull_requests?.length || r.pull_requests.some((p) => Number(p.number) === Number(pr));
   return runs
-    .filter((r) => r.event === "pull_request" && r.path === path && r.head_sha.toLowerCase() === headSha.toLowerCase())
+    .filter((r) => r.event === "pull_request" && r.path === path && r.head_sha.toLowerCase() === headSha.toLowerCase() && ofPr(r))
     .sort((a, b) => b.run_number - a.run_number || b.run_attempt - a.run_attempt)[0];
 }
 
@@ -42,7 +44,7 @@ export async function run({ repo, pr, assoc, trusted = DEFAULT_TRUSTED, workflow
   if (pull.state !== "open") return { status: "skip", reason: `PR #${pr} is ${pull.state}: nothing to re-run.` };
   const headSha = pull.head.sha;
   const runsPath = `repos/${repo}/actions/runs?event=pull_request&head_sha=${headSha}&per_page=100`;
-  let target = pickRun((await api(runsPath)).workflow_runs, { headSha, path });
+  let target = pickRun((await api(runsPath)).workflow_runs, { headSha, path, pr });
   if (!target) return { status: "skip", reason: `No ${path} run for head ${headSha.slice(0, 7)}: nothing to re-run. Push or relabel to start one.` };
   // A re-run that a faster comment started a moment ago can still read as completed
   // here, and then GitHub refuses ours. Wait for that run to finish and try again:

@@ -111,3 +111,10 @@ test("a re-run that keeps failing ends as a failure, not a hang", async () => {
   assert.equal(r.status, "fail");
   assert.match(r.reason, /boom/);
 });
+
+test("two PRs at one head: a comment on one re-runs that PR's run", async () => {
+  const runs = [wr({ id: 100, run_number: 5, pull_requests: [{ number: 7 }] }), wr({ id: 200, run_number: 9, pull_requests: [{ number: 8 }] })];
+  const f = fake({ runs });
+  assert.equal((await go(f)).status, "rerun");
+  assert.deepEqual(f.calls.rerun, [100]);
+});
