@@ -30,7 +30,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const root = process.argv[2] ?? ".";
   const sha = defaultPin(readFileSync(join(root, ".github/workflows/risk-label.yml"), "utf8"));
   if (!sha) { console.error("::error::no default gantry-ref sha found in risk-label.yml"); process.exit(1); }
-  const files = stale(root, sha);
+  let files;
+  try { files = stale(root, sha); } catch (e) {
+    console.error(`::error::can't compare the pin ${sha} with the tree: ${String(e.stderr || e.message).trim()}`);
+    process.exit(1);
+  }
   if (files.length) {
     console.error(`::error::risk-label's default gantry-ref ${sha} is stale: ${files.join(", ")} changed since. Bump it to a commit that has them.`);
     process.exit(1);

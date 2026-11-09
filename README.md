@@ -462,8 +462,8 @@ jobs:
   to `risk-label`.
 - **Big PRs.** A PR of 3000+ files (the API's cap; renames count once) is
   labelled, since the file list may be cut short.
-- **Errors show.** Only "label already exists" is ignored when creating the label;
-  any other failure fails the job. The label is added through the REST labels
+- **Errors show.** A failed label create is ignored only if the label exists
+  afterwards; any other failure fails the job. The label is added through the REST labels
   endpoint, which the workflow token accepts.
 - The `verdict-check / verdict-check` job now runs on every PR and skips inside
   the script when there is no label, instead of being skipped by the workflow.

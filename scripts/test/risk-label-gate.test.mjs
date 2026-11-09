@@ -32,7 +32,8 @@ case "$1 $2" in
   "api repos/o/r/pulls/7/files") while [ $# -gt 0 ]; do [ "$1" = --jq ] && expr="$2"; shift; done; jq -r "$expr" "${dir}/files.json" ;;
   "api -X") ${ghFails ? "exit 1" : "exit 0"} ;;
   "api repos/o/r/issues/7/labels") printf '%s\\n' ${existing.map((l) => `'${l}'`).join(" ")} ;;
-  "label create") ${labelCreate === "exists" ? 'echo "label already exists" >&2; exit 1' : labelCreate === "denied" ? 'echo "HTTP 403: Resource not accessible" >&2; exit 1' : "exit 0"} ;;
+  "label create") ${labelCreate === "exists" ? 'echo "422 already_exists" >&2; exit 1' : labelCreate === "denied" ? 'echo "HTTP 403: Resource not accessible" >&2; exit 1' : "exit 0"} ;;
+  "label list") ${labelCreate === "exists" ? 'echo risk:high' : "true"} ;;
 esac
 `);
   writeFileSync(join(bin, "curl"), `#!/bin/bash
@@ -125,7 +126,7 @@ test("label: renames' old names don't count toward the 3000-file cap", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.doesNotMatch(r.gh, /-X POST/);
 });
-test("label: 'label already exists' is fine, any other label-create error fails the job", () => {
+test("label: a create that fails because the label exists is fine, whatever the wording, any other label-create error fails the job", () => {
   const f = { files: [".github/workflows/ci.yml"] };
   const ok = run(LABEL, {}, { ...f, labelCreate: "exists" });
   assert.equal(ok.status, 0, ok.stderr);

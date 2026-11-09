@@ -108,7 +108,7 @@ jobs:
           # caught. Lines are tagged (N = filename, P = previous_filename) so the 3000 cap below
           # counts files, not the extra rename entries.
           gh api "repos/$REPO/pulls/$PR/files" --paginate \
-            --jq '.[] | "N " + .filename, (if .previous_filename then "P " + .previous_filename else empty end)' > /tmp/tagged.txt
+            --jq '.[] | "N " + (.filename | gsub("\n"; " ")), (if .previous_filename then "P " + (.previous_filename | gsub("\n"; " ")) else empty end)' > /tmp/tagged.txt
           cut -c3- /tmp/tagged.txt > /tmp/changed.txt
           node /tmp/high-risk-paths.mjs .github/gantry-high-risk-paths /tmp/changed.txt > /tmp/matches.md
           if [ "$(grep -c '^N ' /tmp/tagged.txt)" -ge 3000 ]; then
@@ -135,11 +135,12 @@ jobs:
             echo "::error::This PR touches High-risk paths but its token is read-only (fork or Dependabot), so it cannot be labelled \`$LABEL\`. A maintainer must add the label."
             exit 1
           fi
-          # Create the label only if the repo has none, so a customised one is kept. "Already
-          # exists" is the one error to ignore; anything else (permissions, API) fails the job.
+          # Create the label only if the repo has none, so a customised one is kept. A failed
+          # create is fine only if the label is there afterwards; any other failure
+          # (permissions, API) fails the job.
           if ! gh label create "$LABEL" --color B60205 \
             --description "High-risk change: needs a verifier's verdict at head" -R "$REPO" 2>/tmp/label-err; then
-            if ! grep -qi "already exists" /tmp/label-err; then
+            if ! gh label list -R "$REPO" --limit 1000 --json name --jq '.[].name' | grep -Fxq "$LABEL"; then
               cat /tmp/label-err >&2
               exit 1
             fi

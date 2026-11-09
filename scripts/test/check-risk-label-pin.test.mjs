@@ -45,3 +45,11 @@ test("the CLI exits 1 on a stale pin and 0 on a current one", () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /stale.*high-risk-paths\.mjs/);
 });
+test("the CLI names an unreachable pin instead of crashing with a stack trace", () => {
+  const { root } = repo();
+  writeFileSync(join(root, ".github/workflows/risk-label.yml"), workflow("b".repeat(40)));
+  const r = spawnSync("node", [CLI, root], { encoding: "utf8" });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /::error::can't compare the pin/);
+  assert.doesNotMatch(r.stderr, /at .*\.mjs/);
+});
