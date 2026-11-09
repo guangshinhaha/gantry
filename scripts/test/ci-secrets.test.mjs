@@ -7,10 +7,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fakeKey } from "../selftest.mjs";
 
 const CI = fileURLToPath(new URL("../../.github/workflows/ci.yml", import.meta.url));
 const DAILY = fileURLToPath(new URL("../../.github/workflows/secrets-scan.yml", import.meta.url));
@@ -302,7 +303,7 @@ for (const [why, before] of [["a new branch", "000000000000000000000000000000000
     // A clean commit, while main's history and \`other\` both hold a key.
     git(f.repo, "checkout", "-q", "--detach", f.init);
     const clean = scan(f, { EVENT: "push", BEFORE: before, SHA: f.init });
-    assert.match(clean.out, /log-opts: HEAD$/m);
+    assert.match(clean.out, /log-opts: HEAD --diff-merges=remerge --text$/m);
     assert.equal(clean.status, 0, clean.out);
     // Its own history is still scanned: main's old key fails it.
     git(f.repo, "checkout", "-q", "main");
@@ -314,7 +315,7 @@ test("any other event scans the checked-out commit's history only", () => {
   const f = fixture();
   git(f.repo, "checkout", "-q", "--detach", f.init);
   const r = scan(f, { EVENT: "workflow_dispatch", SHA: f.init });
-  assert.match(r.out, /log-opts: HEAD$/m);
+  assert.match(r.out, /log-opts: HEAD --diff-merges=remerge --text$/m);
   assert.equal(r.status, 0, r.out);
 });
 
@@ -322,6 +323,255 @@ test("a range that can't be resolved fails the step, never passes it", () => {
   const f = fixture();
   const r = scan(f, { EVENT: "pull_request", PR_BASE: "1234567890123456789012345678901234567890", PR_HEAD: f.main, SHA: f.main });
   assert.notEqual(r.status, 0, r.out);
+  assert.doesNotMatch(r.out, /no leaks found/);
+});
+
+// --- What a PR can't hide from the scan, or switch off (gantry#68, #69, #84) ---
+// These run the real gitleaks, because what they check is how git and gitleaks
+// read a checkout: a stub can't tell remerge, GIT_ATTR_SOURCE or --config from
+// no flag at all. They skip where gitleaks or jq isn't installed.
+
+const which = (cmd) => { try { return execFileSync("which", [cmd], { encoding: "utf8" }).trim(); } catch { return ""; } };
+const REAL = which("gitleaks");
+const skipReal = REAL && which("jq") ? false : "needs gitleaks and jq on PATH";
+const real = (name, fn) => test(name, { skip: skipReal }, fn);
+
+const keyLine = () => `api_key = "${fakeKey()}"\n`;
+const allowlist = (path) => `[extend]\nuseDefault = true\n[allowlist]\npaths = ['''${path}''']\n`;
+
+// Stub gh: answers every call with the reviews JSON in $STUB_REVIEWS.
+const REVIEWS = `#!/bin/bash
+cat "$STUB_REVIEWS"
+`;
+
+function put(repo, files, msg) {
+  for (const [f, t] of Object.entries(files)) {
+    mkdirSync(join(repo, f, ".."), { recursive: true });
+    writeFileSync(join(repo, f), t);
+  }
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", msg);
+}
+
+// main with `baseFiles`, a PR branch that `build` adds commits to, and the
+// merge-ref checkout GitHub makes of them.
+function realPr({ baseFiles = {}, build }) {
+  const dir = mkdtempSync(join(tmpdir(), "gantry-real-"));
+  symlinkSync(REAL, join(dir, "gitleaks"));
+  exe(dir, "gh", REVIEWS);
+  const repo = join(dir, "repo");
+  mkdirSync(repo);
+  git(repo, "init", "-q", "-b", "main");
+  git(repo, "config", "user.email", "t@example.com");
+  git(repo, "config", "user.name", "t");
+  put(repo, { "README.md": "hi\n", ...baseFiles }, "init");
+  const base = git(repo, "rev-parse", "HEAD");
+  git(repo, "checkout", "-q", "-b", "pr");
+  build(repo, base);
+  const head = git(repo, "rev-parse", "HEAD");
+  git(repo, "checkout", "-q", "--detach", base);
+  git(repo, "merge", "-q", "--no-ff", "-m", "merge ref", head);
+  return { dir, repo, base, head };
+}
+
+// Two sides that both edit shared.md, merged with `resolution`; `extra` files
+// are added by the merge commit alone.
+function mergeSide(repo, base, { resolution, extra = {} }) {
+  put(repo, { "shared.md": "ours\n" }, "ours");
+  git(repo, "checkout", "-q", "-b", "side", base);
+  put(repo, { "shared.md": "theirs\n" }, "theirs");
+  git(repo, "checkout", "-q", "pr");
+  try { git(repo, "merge", "-q", "side"); } catch { /* the conflict is the point */ }
+  writeFileSync(join(repo, "shared.md"), resolution);
+  for (const [f, t] of Object.entries(extra)) writeFileSync(join(repo, f), t);
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", "merge side");
+}
+
+const review = (user, state, commit, assoc = "COLLABORATOR") => ({ user: { login: user }, state, commit_id: commit, author_association: assoc });
+function realScan(f, reviews = []) {
+  const file = join(f.dir, "reviews.json");
+  writeFileSync(file, JSON.stringify(reviews));
+  return bash(stepScript(CI, "gitleaks"), {
+    dir: f.dir, cwd: f.repo,
+    env: { EVENT: "pull_request", PR_BASE: f.base, PR_HEAD: f.head, PR_NUMBER: "7", PR_AUTHOR: "alice", REPO: "o/r", GH_TOKEN: "x", SHA: git(f.repo, "rev-parse", "HEAD"), STUB_REVIEWS: file },
+  });
+}
+
+real("a key added only while resolving a merge conflict fails the scan (gantry#69)", () => {
+  const f = realPr({ baseFiles: { "shared.md": "common\n" }, build: (repo, base) => mergeSide(repo, base, { resolution: keyLine() }) });
+  const r = realScan(f);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /leaks found: 1/);
+});
+
+real("a key in an evil merge's own files fails the scan (gantry#84)", () => {
+  const f = realPr({ baseFiles: { "shared.md": "common\n" }, build: (repo, base) => mergeSide(repo, base, { resolution: "resolved\n", extra: { "docs.md": keyLine() } }) });
+  const r = realScan(f);
+  assert.equal(r.status, 1, r.out);
+});
+
+real("a conflict resolved by hand, with no key, stays green", () => {
+  const f = realPr({ baseFiles: { "shared.md": "common\n" }, build: (repo, base) => mergeSide(repo, base, { resolution: "resolved\n" }) });
+  const r = realScan(f);
+  assert.equal(r.status, 0, r.out);
+});
+
+real("main's own key, merged into the PR branch, belongs to main and stays green (gantry#36)", () => {
+  // Main takes a key after the PR branches, then the PR merges main back in.
+  const f = realPr({
+    build: (repo) => {
+      put(repo, { "docs.md": "clean\n" }, "pr change");
+      git(repo, "checkout", "-q", "-b", "later", "main");
+      put(repo, { "old.md": keyLine() }, "main takes a key");
+      git(repo, "checkout", "-q", "pr");
+      git(repo, "merge", "-q", "--no-edit", "later");
+    },
+  });
+  // The merge ref's first parent is main with that key already in it.
+  git(f.repo, "checkout", "-q", "--detach", "later");
+  git(f.repo, "merge", "-q", "--no-ff", "-m", "merge ref", f.head);
+  const r = realScan(f);
+  assert.equal(r.status, 0, r.out);
+});
+
+real("a PR's `-diff` attribute can't hide a file from the scan (gantry#84)", () => {
+  const f = realPr({ build: (repo) => put(repo, { ".gitattributes": "docs/k.md -diff\n", "docs/k.md": keyLine() }, "hide it") });
+  const r = realScan(f);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /leaks found: 1/);
+});
+
+real("a NUL byte can't make git treat a file as binary and hide its key", () => {
+  const f = realPr({ build: (repo) => put(repo, { "docs/k.txt": `\0\n${keyLine()}` }, "nul") });
+  const r = realScan(f);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /leaks found: 1/);
+});
+
+real("a PR's own .gitleaks.toml can't allowlist its key, and the PR is flagged for a person (gantry#68, #84)", () => {
+  const f = realPr({ build: (repo) => put(repo, { "docs/k.md": keyLine(), ".gitleaks.toml": allowlist("docs/k\\.md") }, "allow it") });
+  const r = realScan(f);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /leaks found: 1/, "the scan used the base's rules, not the PR's");
+  assert.match(r.out, /changes the scan's config \(\.gitleaks\.toml\)/);
+  assert.match(r.out, /must approve the PR at its current head/);
+});
+
+real("a PR can't edit a file the base .gitleaks.toml extends by path", () => {
+  const baseFiles = { ".gitleaks.toml": '[extend]\npath = "rules.toml"\n', "rules.toml": "[extend]\nuseDefault = true\n" };
+  const f = realPr({ baseFiles, build: (repo) => put(repo, { "rules.toml": allowlist("k\\.txt"), "k.txt": keyLine() }, "allow it") });
+  const r = realScan(f);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /leaks found: 1/);
+  // And a clean PR on the same base stays green.
+  const g = realPr({ baseFiles, build: (repo) => put(repo, { "docs/a.md": "docs\n" }, "docs") });
+  assert.equal(realScan(g).status, 0);
+});
+
+real("moving a file that already says gitleaks:allow isn't adding it", () => {
+  const f = realPr({
+    baseFiles: { "docs/guide.md": "use // gitleaks:allow to mute\n" },
+    build: (repo) => { mkdirSync(join(repo, "guides")); git(repo, "mv", "docs/guide.md", "guides/guide.md"); git(repo, "commit", "-q", "-m", "move"); },
+  });
+  const r = realScan(f);
+  assert.equal(r.status, 0, r.out);
+});
+
+real("a PR's own .gitleaksignore can't ignore its key, and the PR is flagged (gantry#68)", () => {
+  const f = realPr({
+    build: (repo) => {
+      put(repo, { "docs/k.md": keyLine() }, "key");
+      put(repo, { ".gitleaksignore": `${git(repo, "rev-parse", "HEAD")}:docs/k.md:generic-api-key:1\n` }, "ignore it");
+    },
+  });
+  const r = realScan(f);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /leaks found: 1/);
+  assert.match(r.out, /changes the scan's config \(\.gitleaksignore\)/);
+});
+
+real("an inline gitleaks:allow flags the PR for a person, naming the file and never printing the line (gantry#68)", () => {
+  const key = keyLine();
+  const f = realPr({ build: (repo) => put(repo, { "docs/k.md": key.replace("\n", " <!-- gitleaks:allow -->\n") }, "allow it") });
+  const r = realScan(f);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /adds gitleaks:allow \(docs\/k\.md\)/);
+  assert.match(r.summary, /adds gitleaks:allow/);
+  assert.ok(!r.out.includes(key.split('"')[1]), "the key stays out of the log");
+});
+
+real("a gitleaks:allow added in one commit and removed in the next is still flagged", () => {
+  const f = realPr({
+    build: (repo) => {
+      put(repo, { "docs/k.md": keyLine().replace("\n", " # gitleaks:allow\n") }, "allow");
+      put(repo, { "docs/k.md": "gone\n" }, "tidy up");
+    },
+  });
+  assert.equal(realScan(f).status, 1);
+});
+
+real("a clean PR stays green and never asks gh anything", () => {
+  const f = realPr({ build: (repo) => put(repo, { "docs/a.md": "just docs\n" }, "docs") });
+  exe(f.dir, "gh", "#!/bin/bash\necho gh was called >&2; exit 9\n");
+  const r = realScan(f);
+  assert.equal(r.status, 0, r.out);
+});
+
+real("the base's .gitleaks.toml still applies to a PR that doesn't touch it", () => {
+  const baseFiles = { ".gitleaks.toml": allowlist("docs/legacy\\.md") };
+  const allowed = realPr({ baseFiles, build: (repo) => put(repo, { "docs/legacy.md": keyLine() }, "in an allowlisted path") });
+  const a = realScan(allowed);
+  assert.equal(a.status, 0, a.out);
+  const other = realPr({ baseFiles, build: (repo) => put(repo, { "docs/new.md": keyLine() }, "elsewhere") });
+  assert.equal(realScan(other).status, 1);
+});
+
+const ALLOW_COMMENT = (repo) => put(repo, { "docs/k.md": keyLine().replace("\n", " <!-- gitleaks:allow -->\n") }, "allow it");
+
+real("a person with write access, not the author, approving at the head clears the override (gantry#68)", () => {
+  const f = realPr({ build: ALLOW_COMMENT });
+  const r = realScan(f, [review("bob", "APPROVED", f.head)]);
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /bob approved it/);
+  assert.match(r.summary, /override approved by bob/);
+});
+
+real("an approved PR's own .gitleaks.toml applies, so a real false positive can be allowlisted", () => {
+  const f = realPr({ build: (repo) => put(repo, { "docs/k.md": keyLine(), ".gitleaks.toml": allowlist("docs/k\\.md") }, "allow it") });
+  assert.equal(realScan(f).status, 1);
+  const r = realScan(f, [review("bob", "APPROVED", f.head)]);
+  assert.equal(r.status, 0, r.out);
+});
+
+for (const [why, reviews] of [
+  ["the author's own approval", (h) => [review("alice", "APPROVED", h, "OWNER")]],
+  ["an approval of an earlier commit", () => [review("bob", "APPROVED", "1".repeat(40))]],
+  ["an approval a later change request overrides", (h) => [review("bob", "APPROVED", h), review("bob", "CHANGES_REQUESTED", h)]],
+  ["a dismissed approval", (h) => [review("bob", "APPROVED", h), review("bob", "DISMISSED", h)]],
+  ["an approval from someone with no write access", (h) => [review("eve", "APPROVED", h, "CONTRIBUTOR")]],
+  ["a comment, not an approval", (h) => [review("bob", "COMMENTED", h)]],
+  ["no review at all", () => []],
+]) {
+  real(`${why} doesn't clear the override`, () => {
+    const f = realPr({ build: ALLOW_COMMENT });
+    const r = realScan(f, reviews(f.head));
+    assert.equal(r.status, 1, r.out);
+    assert.match(r.out, /override needs a person/);
+  });
+}
+
+real("an approval followed by a plain comment from the same person still counts", () => {
+  const f = realPr({ build: ALLOW_COMMENT });
+  assert.equal(realScan(f, [review("bob", "APPROVED", f.head), review("bob", "COMMENTED", f.head)]).status, 0);
+});
+
+test("a git older than 2.40 fails the scan with a message, never passes it", () => {
+  const f = fixture();
+  exe(f.dir, "git", `#!/bin/bash\n[ "$1" = version ] && { echo "git version 2.39.5"; exit 0; }\nexec /usr/bin/git "$@"\n`);
+  const r = scan(f, { EVENT: "workflow_dispatch", SHA: f.init });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /git 2\.39 is too old/);
   assert.doesNotMatch(r.out, /no leaks found/);
 });
 
