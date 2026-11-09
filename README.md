@@ -431,13 +431,14 @@ with `gitleaks:allow` comments ignored. A PR that changes a `.gitleaks.toml`
 or `.gitleaksignore` anywhere in the repo, or adds a line containing
 `gitleaks:allow` (a doc that mentions it counts), fails the `secrets` job until
 a person approves it:
-- the approver needs write access and must not be the PR's author;
+- the approver must be the repo's owner, a member or a collaborator (GitHub's
+  association on the review) and not the PR's author;
 - the approval must be on the PR's current head, so a later push needs a new one;
 - after approving, re-run the `secrets` job. The PR's own config, ignore file
   and allow comments then apply, which is how a real false positive gets
   allowlisted. Once merged, the change is the base's, and later PRs use it.
 
-A repo with one person has no approver. Land such a change with a direct push.
+A repo with one person has no approver. Land such a change with an admin's direct push or branch-protection bypass.
 
 **Needs.** git 2.40 or newer (older fails the job with a message), and `gh`
 and `jq` on the runner (GitHub-hosted runners have both). A base
