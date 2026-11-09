@@ -22,9 +22,10 @@
 # person set stays, and one added here stays after the PR stops matching, until a
 # person removes it. A label added with the workflow token doesn't trigger other
 # runs, so verdict-check (which needs this job) reads the PR's live labels.
-# A fork PR's token is read-only, so it can't be labelled: if it touches a High-risk
-# path the job fails, so it can't pass as an unlabelled PR. A PR of 3000+ files (the
-# API's cap) is labelled, since the list may be cut short.
+# A fork PR's token is read-only, and so is Dependabot's, so neither can be labelled: if
+# one touches a High-risk path the job fails, so it can't pass as an unlabelled PR, unless
+# a maintainer has already put the label on it. Removing the label by hand doesn't re-run
+# the labelling. A PR of 3000+ files (the API's cap) is labelled, since the list may be cut short.
 # The matching scripts are downloaded at `gantry-ref`, a full commit sha (default: a pinned
 # one, bumped when the scripts change), never a moving ref.
 name: gantry-risk-label
@@ -59,14 +60,27 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_LABEL: ${{ github.event.label.name }}
+          LABEL: ${{ inputs.label }}
         run: |
           if [ -z "$PR_NUMBER" ]; then
             echo "Skipped: not a pull request" >> "$GITHUB_STEP_SUMMARY"
             echo "run=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # A person just removed the label: don't add it straight back.
+          if [ "$EVENT_ACTION" = "unlabeled" ] && [ "$EVENT_LABEL" = "$LABEL" ]; then
+            echo "Skipped: \`$LABEL\` was removed by hand, so it is not re-added" >> "$GITHUB_STEP_SUMMARY"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "run=true" >> "$GITHUB_OUTPUT"
-          if [ "$HEAD_REPO" != "$REPO" ]; then echo "fork=true" >> "$GITHUB_OUTPUT"; fi
+          # A fork's token is read-only; so is Dependabot's, even on a same-repo branch.
+          if [ "$HEAD_REPO" != "$REPO" ] || [ "$ACTOR" = "dependabot[bot]" ]; then
+            echo "readonly=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/checkout@v4
         if: steps.gate.outputs.run == 'true'
@@ -81,7 +95,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           LABEL: ${{ inputs.label }}
           GANTRY_REF: ${{ inputs.gantry-ref }}
-          FORK: ${{ steps.gate.outputs.fork }}
+          READONLY: ${{ steps.gate.outputs.readonly }}
         run: |
           # The scripts run with a write token, so they must come from a fixed commit.
           if ! printf '%s' "$GANTRY_REF" | grep -Eq '^[0-9a-f]{40}$'; then
@@ -90,11 +104,14 @@ jobs:
           fi
           curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/high-risk-paths.mjs" -o /tmp/high-risk-paths.mjs
           curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/risky-paths.mjs" -o /tmp/risky-paths.mjs
-          # Include old names of renamed files, so moving a file out of a High-risk path is still caught.
+          # Include old names of renamed files, so moving a file out of a High-risk path is still
+          # caught. Lines are tagged (N = filename, P = previous_filename) so the 3000 cap below
+          # counts files, not the extra rename entries.
           gh api "repos/$REPO/pulls/$PR/files" --paginate \
-            --jq '.[] | .filename, (.previous_filename // empty)' > /tmp/changed.txt
+            --jq '.[] | "N " + .filename, (if .previous_filename then "P " + .previous_filename else empty end)' > /tmp/tagged.txt
+          cut -c3- /tmp/tagged.txt > /tmp/changed.txt
           node /tmp/high-risk-paths.mjs .github/gantry-high-risk-paths /tmp/changed.txt > /tmp/matches.md
-          if [ "$(wc -l < /tmp/changed.txt)" -ge 3000 ]; then
+          if [ "$(grep -c '^N ' /tmp/tagged.txt)" -ge 3000 ]; then
             echo "- 3000+ files changed: the file list may be cut short, so labelling to be safe" > /tmp/matches.md
           fi
           if [ ! -s /tmp/matches.md ]; then
@@ -109,11 +126,23 @@ jobs:
             echo
             cat /tmp/matches.md
           } | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ "$FORK" = "true" ]; then
-            echo "::error::This fork PR touches High-risk paths but its token is read-only, so it cannot be labelled \`$LABEL\`. A maintainer must add the label."
+          if [ "$READONLY" = "true" ]; then
+            # Read-only token: it can't label, but a maintainer may already have.
+            if gh api "repos/$REPO/issues/$PR/labels" --paginate --jq '.[].name' | grep -Fxq "$LABEL"; then
+              echo "Already labelled \`$LABEL\` (read-only token, so nothing to add)." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::error::This PR touches High-risk paths but its token is read-only (fork or Dependabot), so it cannot be labelled \`$LABEL\`. A maintainer must add the label."
             exit 1
           fi
-          # Create the label only if the repo has none, so a customised one is kept.
-          gh label create "$LABEL" --color B60205 \
-            --description "High-risk change: needs a verifier's verdict at head" -R "$REPO" 2>/dev/null || true
-          gh pr edit "$PR" --add-label "$LABEL" -R "$REPO"
+          # Create the label only if the repo has none, so a customised one is kept. "Already
+          # exists" is the one error to ignore; anything else (permissions, API) fails the job.
+          if ! gh label create "$LABEL" --color B60205 \
+            --description "High-risk change: needs a verifier's verdict at head" -R "$REPO" 2>/tmp/label-err; then
+            if ! grep -qi "already exists" /tmp/label-err; then
+              cat /tmp/label-err >&2
+              exit 1
+            fi
+          fi
+          # REST, not `gh pr edit`: its GraphQL call can be refused under GITHUB_TOKEN.
+          gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=$LABEL" > /dev/null

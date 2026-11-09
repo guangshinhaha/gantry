@@ -18,7 +18,7 @@ const GATE = step("Decide whether to run");
 const LABEL = step("Add the label if a High-risk path changed");
 const SHA = "a".repeat(40);
 
-function run(body, env, { files = [], ghFails = false } = {}) {
+function run(body, env, { files = [], ghFails = false, existing = [], labelCreate = "ok" } = {}) {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "risk-gate-"));
   const bin = join(dir, "bin");
   const sh = (name, text) => { writeFileSync(join(dir, name), text); chmodSync(join(dir, name), 0o755); };
@@ -30,7 +30,9 @@ function run(body, env, { files = [], ghFails = false } = {}) {
 echo "$*" >> "${dir}/gh.log"
 case "$1 $2" in
   "api repos/o/r/pulls/7/files") while [ $# -gt 0 ]; do [ "$1" = --jq ] && expr="$2"; shift; done; jq -r "$expr" "${dir}/files.json" ;;
-  "pr edit") ${ghFails ? "exit 1" : "exit 0"} ;;
+  "api -X") ${ghFails ? "exit 1" : "exit 0"} ;;
+  "api repos/o/r/issues/7/labels") printf '%s\\n' ${existing.map((l) => `'${l}'`).join(" ")} ;;
+  "label create") ${labelCreate === "exists" ? 'echo "label already exists" >&2; exit 1' : labelCreate === "denied" ? 'echo "HTTP 403: Resource not accessible" >&2; exit 1' : "exit 0"} ;;
 esac
 `);
   writeFileSync(join(bin, "curl"), `#!/bin/bash
@@ -57,41 +59,81 @@ test("gate: not a pull request means skip", () => {
   assert.equal(r.status, 0);
   assert.match(r.output, /run=false/);
 });
-test("gate: same-repo PR runs, fork PR is flagged", () => {
-  assert.doesNotMatch(run(GATE, { PR_NUMBER: "7", HEAD_REPO: "o/r" }).output, /fork=true/);
-  const fork = run(GATE, { PR_NUMBER: "7", HEAD_REPO: "x/r" });
+test("gate: same-repo PR runs, fork PR is flagged read-only", () => {
+  assert.doesNotMatch(run(GATE, { PR_NUMBER: "7", HEAD_REPO: "o/r", ACTOR: "shin" }).output, /readonly=true/);
+  const fork = run(GATE, { PR_NUMBER: "7", HEAD_REPO: "x/r", ACTOR: "shin" });
   assert.match(fork.output, /run=true/);
-  assert.match(fork.output, /fork=true/);
+  assert.match(fork.output, /readonly=true/);
+});
+test("gate: a Dependabot PR on a same-repo branch is read-only too", () => {
+  const r = run(GATE, { PR_NUMBER: "7", HEAD_REPO: "o/r", ACTOR: "dependabot[bot]" });
+  assert.match(r.output, /run=true/);
+  assert.match(r.output, /readonly=true/);
+});
+test("gate: removing the label by hand does not re-run the labelling", () => {
+  const r = run(GATE, { PR_NUMBER: "7", HEAD_REPO: "o/r", EVENT_ACTION: "unlabeled", EVENT_LABEL: "risk:high", LABEL: "risk:high" });
+  assert.match(r.output, /run=false/);
+  assert.doesNotMatch(r.output, /run=true/);
+});
+test("gate: removing some other label, or any other event, still runs", () => {
+  assert.match(run(GATE, { PR_NUMBER: "7", HEAD_REPO: "o/r", EVENT_ACTION: "unlabeled", EVENT_LABEL: "bug", LABEL: "risk:high" }).output, /run=true/);
+  assert.match(run(GATE, { PR_NUMBER: "7", HEAD_REPO: "o/r", EVENT_ACTION: "labeled", EVENT_LABEL: "risk:high", LABEL: "risk:high" }).output, /run=true/);
 });
 
 test("label: a High-risk file gets the label", () => {
   const r = run(LABEL, {}, { files: ["README.md", ".github/workflows/ci.yml"] });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.gh, /pr edit 7 --add-label risk:high -R o\/r/);
+  assert.match(r.gh, /api -X POST repos\/o\/r\/issues\/7\/labels -f labels\[\]=risk:high/);
+  assert.doesNotMatch(r.gh, /pr edit/);
 });
 test("label: an unrelated PR gets no label", () => {
   const r = run(LABEL, {}, { files: ["README.md", "src/a.js"] });
   assert.equal(r.status, 0, r.stderr);
-  assert.doesNotMatch(r.gh, /pr edit/);
+  assert.doesNotMatch(r.gh, /-X POST/);
 });
 test("label: a High-risk file renamed away is still caught by its old name", () => {
   const r = run(LABEL, {}, { files: [{ filename: "docs/ci.yml", previous_filename: ".github/workflows/ci.yml" }] });
-  assert.match(r.gh, /--add-label/);
+  assert.match(r.gh, /-X POST/);
 });
 test("label: 3000+ files are labelled even with nothing matching", () => {
   const files = Array.from({ length: 3000 }, (_, i) => `src/f${i}.js`);
-  assert.match(run(LABEL, {}, { files }).gh, /--add-label/);
+  assert.match(run(LABEL, {}, { files }).gh, /-X POST/);
 });
 test("label: a fork PR touching a High-risk path fails and adds nothing", () => {
-  const r = run(LABEL, { FORK: "true" }, { files: [".github/workflows/ci.yml"] });
+  const r = run(LABEL, { READONLY: "true" }, { files: [".github/workflows/ci.yml"] });
   assert.notEqual(r.status, 0);
-  assert.doesNotMatch(r.gh, /--add-label/);
+  assert.doesNotMatch(r.gh, /-X POST/);
+});
+test("label: a read-only PR that a maintainer already labelled passes", () => {
+  const r = run(LABEL, { READONLY: "true" }, { files: [".github/workflows/ci.yml"], existing: ["bug", "risk:high"] });
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.gh, /-X POST/);
+});
+test("label: a read-only PR with only a lookalike label still fails", () => {
+  const r = run(LABEL, { READONLY: "true" }, { files: [".github/workflows/ci.yml"], existing: ["risk:higher", "not-risk:high"] });
+  assert.notEqual(r.status, 0);
 });
 test("label: a fork PR touching nothing risky passes", () => {
-  assert.equal(run(LABEL, { FORK: "true" }, { files: ["README.md"] }).status, 0);
+  assert.equal(run(LABEL, { READONLY: "true" }, { files: ["README.md"] }).status, 0);
 });
 test("label: a failed gh edit fails the job", () => {
   assert.notEqual(run(LABEL, {}, { files: [".github/workflows/ci.yml"], ghFails: true }).status, 0);
+});
+test("label: renames' old names don't count toward the 3000-file cap", () => {
+  const files = Array.from({ length: 1600 }, (_, i) => ({ filename: `src/n${i}.js`, previous_filename: `src/o${i}.js` }));
+  const r = run(LABEL, {}, { files });
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.gh, /-X POST/);
+});
+test("label: 'label already exists' is fine, any other label-create error fails the job", () => {
+  const f = { files: [".github/workflows/ci.yml"] };
+  const ok = run(LABEL, {}, { ...f, labelCreate: "exists" });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.gh, /-X POST/);
+  const bad = run(LABEL, {}, { ...f, labelCreate: "denied" });
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /403/);
+  assert.doesNotMatch(bad.gh, /-X POST/);
 });
 test("label: scripts are downloaded at the given sha, from nowhere else", () => {
   const r = run(LABEL, {}, { files: ["README.md"] });
@@ -104,7 +146,7 @@ test("label: a branch or tag name as gantry-ref is refused before anything is do
     const r = run(LABEL, { GANTRY_REF: ref }, { files: [".github/workflows/ci.yml"] });
     assert.notEqual(r.status, 0, ref);
     assert.equal(r.curl, "", ref);
-    assert.doesNotMatch(r.gh, /--add-label/, ref);
+    assert.doesNotMatch(r.gh, /-X POST/, ref);
   }
 });
 
