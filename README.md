@@ -443,6 +443,11 @@ jobs:
   passes as a skip.
 - **Fork PRs.** A fork PR's token is read-only, so it can't be labelled. If it
   touches a High-risk path the job fails; a maintainer adds the label by hand.
+- **Pinned scripts.** The matching scripts run with a write token, so
+  `risk-label` downloads them at `gantry-ref`, which must be a full 40-character
+  commit sha (a branch or tag name is refused). The default is a pinned sha,
+  bumped when the scripts change. gantry's own caller passes the PR's base sha,
+  so a PR that edits the matcher is labelled by the old one.
 - **One label name.** If you set `label:` on verdict-check, pass the same `label:`
   to `risk-label`.
 - **Big PRs.** A PR of 3000+ files (the API's cap) is labelled, since the file
