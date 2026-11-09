@@ -6,7 +6,8 @@
 #
 # Reads Closes/Fixes/Resolves #N from the PR body. If issue N has an
 # "Acceptance criteria" checklist, fails unless the PR body has that section
-# with every item ticked. Skips drafts, and PRs with no such issue.
+# with every item ticked. Skips drafts, and PRs with no such issue, and says why
+# in the job summary (the draft check is a step, not a job-level `if:`, so it can).
 name: gantry-ac-check
 
 on:
@@ -27,11 +28,25 @@ permissions:
 
 jobs:
   ac-check:
-    if: ${{ github.event.pull_request && !github.event.pull_request.draft }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
+      - name: Decide whether to run
+        id: gate
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          if [ -z "$PR_NUMBER" ]; then reason="not a pull request"
+          elif [ "$DRAFT" = "true" ]; then reason="draft PR"
+          else echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "Skipping: $reason"
+          echo "Skipped: $reason" >> "$GITHUB_STEP_SUMMARY"
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
       - name: Check acceptance criteria
+        if: steps.gate.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

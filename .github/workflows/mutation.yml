@@ -9,7 +9,8 @@
 # repo's stryker config sets thresholds.break. Cases with no covering tests, or
 # failing tests, are explained in the comment and stay green.
 # Manual run (workflow_dispatch): mutates everything in the config's `mutate`.
-# Skips itself when the repo has no stryker config.
+# Skips itself, with the reason in the job summary, when the repo has no stryker
+# config or the PR changed no source files.
 name: gantry-mutation
 
 on:
@@ -55,6 +56,7 @@ jobs:
           cfg=$(ls stryker.config.* stryker.conf.* 2>/dev/null | head -1 || true)
           if [ -z "$cfg" ]; then
             echo "No stryker config: mutation testing is off for this repo."
+            echo "Skipped: no stryker config, mutation testing is off for this repo." >> "$GITHUB_STEP_SUMMARY"
             echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if [ -z "$BASE_SHA" ]; then
@@ -67,6 +69,7 @@ jobs:
             || true)
           if [ -z "$files" ]; then
             echo "No source files changed: nothing to mutate."
+            echo "Skipped: no source files changed, nothing to mutate." >> "$GITHUB_STEP_SUMMARY"
             echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "Mutating:"; echo "$files"
