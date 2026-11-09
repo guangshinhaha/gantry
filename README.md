@@ -99,11 +99,16 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   when every file is a `*.md`, or an image, PDF or text file (`.png`, `.jpg`,
   `.svg`, `.pdf`, `.txt` and similar) under `docs/`. Any other file under
   `docs/` counts as code, so a script, `.json`, `.yml` or `.mdx` there runs the
-  checks. It is judged by path. A `*.md` counts as docs wherever it is, even
-  if code reads it, such as a prompt file. A renamed file counts under both its
+  checks. It is judged by path, never by what the file is or what reads it. A
+  `*.md` counts as docs wherever it is, even if code reads it, such as a prompt
+  file. So does a docs file that code reaches through a symlink: if `src/rate.ts`
+  is a symlink to `docs/rate.md`, a change to only `docs/rate.md` skips the
+  checks. Don't link code to a docs file. A renamed file counts under both its
   old and new name. When the file list may be cut off (a PR whose list is
   shorter than its changed-file count, or a push of 300 or more files), the
-  change is not docs-only.
+  change is not docs-only. A push is docs-only only if it is a fast-forward of
+  the branch's previous tip: after a force-push the list of changes can't show
+  the code the old and new tips share, so the checks run.
 - **`gantry / ci-ok`**: one summary check. It fails if any job failed or was
   cancelled; skipped jobs count as passing. This is the check to require.
 - Optional: **second review by Claude** (see below). Runs once when a PR opens

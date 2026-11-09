@@ -37,7 +37,7 @@ filter() { while [ $# -gt 0 ]; do [ "$1" = --jq ] && { printf '%s' "$2"; return;
 case "$*" in
   *"/pulls/"*"/files"*) printf '%s' "$STUB_FILES" | jq -r "$(filter "$@")" ;;
   *"/pulls/"*) printf '%s' "$STUB_PR" | jq -r "$(filter "$@")" ;;
-  *"/compare/"*) [ "$STUB_COMPARE" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }; printf '%s' "$STUB_COMPARE" | jq -r "$(filter "$@")" ;;
+  *"/compare/"*) [ "$STUB_COMPARE" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }; f=$(filter "$@"); printf '%s' "$STUB_COMPARE" | jq -r "\${f:-.}" ;;
   *"/commits/"*"/pulls"*) [ "$STUB_MERGED" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_MERGED" | jq -r "$(filter "$@")" ;;
   *"/commits/"*"/check-runs"*) [ "$STUB_CHECKS" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_CHECKS" | jq -r "$(filter "$@")" ;;
   *"/contents/package.json"*)
@@ -64,10 +64,11 @@ esac
 
 // files: names, or {filename, previous_filename} for a rename. changed: the
 // PR's changed_files count (defaults to the number listed). compare: what the
-// push path's compare API lists ("fail" = the call errors).
+// push path's compare API lists ("fail" = the call errors); compareStatus: its
+// `status` ("ahead" = BEFORE is an ancestor of SHA, "diverged" = a force-push).
 function runGate({
   root, tree = [], truncated = false, treeFails = false, treeBody = "", gitPaths = null, node = "true",
-  files = ["src/x.ts"], changed = files.length, event = "pull_request", compare = [], merged = [],
+  files = ["src/x.ts"], changed = files.length, event = "pull_request", compare = [], compareStatus = "ahead", merged = [],
   ref = "refs/heads/main", checks = { check_runs: [] },
 }) {
   const entry = (f) => (typeof f === "string" ? { filename: f } : f);
@@ -91,7 +92,7 @@ function runGate({
         GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary,
         REPO: "o/r", EVENT: event, PR: "1", SHA: "abc", BEFORE: event === "push" ? "def" : "",
         STUB_FILES: JSON.stringify(files.map(entry)), STUB_PR: JSON.stringify({ changed_files: changed }),
-        STUB_COMPARE: compare === "fail" ? "fail" : JSON.stringify({ files: compare.map(entry) }), STUB_MERGED: merged === "fail" ? "fail" : JSON.stringify(merged),
+        STUB_COMPARE: compare === "fail" ? "fail" : JSON.stringify({ status: compareStatus, files: compare.map(entry) }), STUB_MERGED: merged === "fail" ? "fail" : JSON.stringify(merged),
         PUSHED_REF: ref, STUB_CHECKS: checks === "fail" ? "fail" : JSON.stringify(checks),
         NODE_INPUT: node, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
         LANG: "C.UTF-8", RUNNER_TEMP: dir, GITHUB_SERVER_URL: "https://github.com", GH_TOKEN: "t",
@@ -281,6 +282,13 @@ test("gate, push: a rename of code to .md runs node", () => {
 });
 test("gate, push: a code file under docs/ runs node", () => assert.equal(push(["docs/limit.ts"]), "true"));
 test("gate, push: a failed compare is not docs-only", () => assert.equal(push("fail"), "true"));
+// gantry#90: after a force-push, compare lists only the commits since the fork,
+// so a code change the old and new tips share is missing from the list.
+const pushStatus = (compareStatus) => runGate({ root: 200, event: "push", compare: ["docs/a.md"], compareStatus }).outputs.run_node;
+test("gate, push: a fast-forward docs push is docs-only", () => assert.equal(pushStatus("ahead"), "false"));
+test("gate, push: a force-push (diverged) of a docs commit runs node", () => assert.equal(pushStatus("diverged"), "true"));
+test("gate, push: a rewind (behind) runs node", () => assert.equal(pushStatus("behind"), "true"));
+test("gate, push: a compare with no status runs node", () => assert.equal(pushStatus(null), "true"));
 test("gate, push: an empty list is not docs-only", () => assert.equal(push([]), "true"));
 
 // A change that removes or renames the root package.json leaves the head with
