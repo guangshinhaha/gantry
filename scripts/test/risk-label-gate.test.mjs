@@ -24,12 +24,12 @@ function run(body, env, { files = [], ghFails = false } = {}) {
   const sh = (name, text) => { writeFileSync(join(dir, name), text); chmodSync(join(dir, name), 0o755); };
   // The label step writes /tmp/*.mjs and /tmp/*.md; point those at this run's dir.
   const script = body.replaceAll("/tmp/", `${dir}/`);
-  writeFileSync(join(dir, "files.txt"), files.map((f) => `${f}\n`).join(""));
+  writeFileSync(join(dir, "files.json"), JSON.stringify(files.map((f) => (typeof f === "string" ? { filename: f } : f))));
   spawnSync("mkdir", ["-p", bin]);
   writeFileSync(join(bin, "gh"), `#!/bin/bash
 echo "$*" >> "${dir}/gh.log"
 case "$1 $2" in
-  "api repos/o/r/pulls/7/files") cat "${dir}/files.txt" ;;
+  "api repos/o/r/pulls/7/files") while [ $# -gt 0 ]; do [ "$1" = --jq ] && expr="$2"; shift; done; jq -r "$expr" "${dir}/files.json" ;;
   "pr edit") ${ghFails ? "exit 1" : "exit 0"} ;;
 esac
 `);
@@ -75,7 +75,7 @@ test("label: an unrelated PR gets no label", () => {
   assert.doesNotMatch(r.gh, /pr edit/);
 });
 test("label: a High-risk file renamed away is still caught by its old name", () => {
-  const r = run(LABEL, {}, { files: ["docs/ci.yml", ".github/workflows/ci.yml"] });
+  const r = run(LABEL, {}, { files: [{ filename: "docs/ci.yml", previous_filename: ".github/workflows/ci.yml" }] });
   assert.match(r.gh, /--add-label/);
 });
 test("label: 3000+ files are labelled even with nothing matching", () => {
