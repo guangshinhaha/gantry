@@ -78,8 +78,18 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
 - **A retargeted PR re-runs `ci`.** The template caller listens for `edited`,
   the only event GitHub sends when a PR's base changes. An edit that leaves the
   base alone (title, body) skips the caller's job and can't cancel a run in
-  flight. A caller copied before this has no `edited`: add the `types:` line,
-  the `if:` and the `group:` suffix from `template/.github/workflows/ci.yml`.
+  flight. The caller's trigger is:
+
+  ```yaml
+  on:
+    push:
+      branches: [main]
+    pull_request:
+      types: [opened, synchronize, reopened, edited]
+  ```
+
+  A caller copied before this has no `edited`: add the `types:` line, the
+  `if:` and the `group:` suffix from `template/.github/workflows/ci.yml`.
 - **Docs-only changes** always run the secret scan, because a key can be
   pasted into a doc. They skip the other checks above inside the job, so the
   status still reports instead of sitting on "pending". A change is docs-only
