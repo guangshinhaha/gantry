@@ -37,7 +37,7 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
 ## What runs when
 
 **On every commit** (fast, staged files only)
-- **Secret scan** (gitleaks): blocks API keys, tokens and passwords.
+- **Secret scan** (gitleaks): flags a key written in a form gitleaks' rules recognise. It misses some forms; see [Secret scan](#secret-scan).
 - **No escape hatches:** blocks newly added `any`, `as any`, `@ts-ignore` and
   `eslint-disable`, the usual ways to make an error disappear instead of fixing it.
 - **ESLint** on the staged files, if the repo uses ESLint.
@@ -68,7 +68,8 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   audits in the same PR comment). See below.
 - The secret scan checks only the PR's own commits, so a key on another branch
   or in old history can't turn an unrelated PR red. A push that isn't a merged
-  PR scans the pushed commits.
+  PR scans the pushed commits. A PR can't loosen the scan for itself; see
+  [Secret scan](#secret-scan).
 - **A push that is a merged PR skips every job**, but only when a PR merged
   into the pushed branch and its head had a green `ci-ok`. A PR merged into
   another branch, or one whose CI was red (an admin merge, or a re-run of the
@@ -399,6 +400,48 @@ to the PR's current head. Without the label the check skips.
 - Only comments from `OWNER`, `MEMBER` or `COLLABORATOR` count. A `pr` field that names another PR is ignored.
 - A comment doesn't trigger the check. After posting a verdict, re-run it (`gh run rerun <id>`).
 - It checks that a verdict exists, not that it is right or independent: the author can post their own `PASS` if they hold one of those roles. Who sets the label is up to you.
+
+## Secret scan
+
+The `secrets` job in `ci.yml` runs gitleaks (v8.30.1, default rules) over the
+commits the run adds. The local hook runs the same tool on staged files, and
+`secrets-scan.yml` scans every branch once a day.
+
+**What it catches.** What gitleaks' rules match, and that is narrower than "any
+key". In docs, the generic rule needs the `name = "value"` shape. These pass,
+though the same key is flagged in that shape:
+- a key in a Markdown table, in prose (`The staging API key is ...`) or in bold
+  (`**API key:** ...`);
+- a file saved as UTF-16, which git treats as binary;
+- a key with low entropy: about 1 in 6 random 32-character hex keys pass.
+
+Treat a green scan as "no key in a form gitleaks knows", not "no key".
+
+**Merge commits.** A merge commit is scanned for what it adds beyond an
+automatic merge of its parents (`--diff-merges=remerge`), so a key added while
+resolving a conflict, or in an evil merge, fails the scan. A clean merge adds
+nothing, so main merged back into a PR branch doesn't bring main's history into
+the scan. The daily scan doesn't read merge commits this way.
+
+**What a PR can't change for itself.** The scan runs with the base branch's
+`.gitleaks.toml` and `.gitleaksignore` (gitleaks' default rules if the base has
+none), the base's `.gitattributes` (so a `-diff` line can't hide a file), and
+with `gitleaks:allow` comments ignored. A PR that changes a `.gitleaks.toml`
+or `.gitleaksignore` anywhere in the repo, or adds a line containing
+`gitleaks:allow` (a doc that mentions it counts), fails the `secrets` job until
+a person approves it:
+- the approver needs write access and must not be the PR's author;
+- the approval must be on the PR's current head, so a later push needs a new one;
+- after approving, re-run the `secrets` job. The PR's own config, ignore file
+  and allow comments then apply, which is how a real false positive gets
+  allowlisted. Once merged, the change is the base's, and later PRs use it.
+
+A repo with one person has no approver. Land such a change with a direct push.
+
+**Needs.** git 2.40 or newer (older fails the job with a message), and `gh`
+and `jq` on the runner (GitHub-hosted runners have both). A base
+`.gitleaks.toml` must be self-contained: it can say `[extend] useDefault = true`
+but not extend a file by relative path.
 
 ## Risky paths
 
