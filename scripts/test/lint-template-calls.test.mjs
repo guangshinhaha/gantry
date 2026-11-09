@@ -70,3 +70,9 @@ test("a blank line ends the marker block: prose after it is not uncommented", { 
   });
   assert.equal(r.status, 0, r.stdout + r.stderr);
 });
+
+test("a caller that grants less than the shared workflow asks for fails (startup_failure otherwise)", { skip }, () => {
+  const r = run((d) => sub(d, "template/.github/workflows/verdict-check.yml", "      actions: write\n", ""));
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /verdict-check\.yml::job verdict-check grants actions: none, but verdict-check\.yml asks for actions: write/);
+});
