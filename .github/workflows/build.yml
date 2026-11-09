@@ -104,6 +104,7 @@ jobs:
           PORT: ${{ inputs.port }}
           HEALTH_PATH: ${{ inputs.health-path }}
           PROBES: ${{ inputs.probes }}
+          TIMEOUT: ${{ inputs.health-timeout }}
         run: |
           fail=0
           bad() { echo "::error title=Smoke test input::$1"; fail=1; }
@@ -111,6 +112,7 @@ jobs:
             *,*) bad "run-image loads the image into Docker, which takes a single platform; got '$PLATFORMS'." ;;
           esac
           case "$PORT" in ""|*[!0-9]*) bad "port must be a number; got '$PORT'." ;; esac
+          case "$TIMEOUT" in ""|*[!0-9]*) bad "health-timeout must be a whole number of seconds; got '$TIMEOUT'." ;; esac
           case "$HEALTH_PATH" in /*) ;; *) bad "health-path must start with /; got '$HEALTH_PATH'." ;; esac
           printf '%s\n' "$PROBES" | while read -r path want _; do
             case "$path" in ""|"#"*) continue ;; esac
@@ -143,7 +145,7 @@ jobs:
           NAME: gantry-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           IMAGE: gantry-smoke:${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          docker run -d --name "$NAME" -e PORT="$PORT" -p "$PORT:$PORT" "$IMAGE"
+          docker run -d --name "$NAME" -e PORT="$PORT" -p "127.0.0.1:$PORT:$PORT" "$IMAGE"
           base="http://localhost:$PORT"
           fail=0
           report() { echo "::error title=Smoke probe failed::$1"; echo "Smoke probe failed: $1" >> "$GITHUB_STEP_SUMMARY"; fail=1; }
@@ -164,7 +166,7 @@ jobs:
             if [ "$(docker inspect -f '{{.State.Running}}' "$NAME")" != true ]; then
               report "health GET $HEALTH_PATH: the container exited before it answered"
             else
-              report "health GET $HEALTH_PATH: no 2xx within ${TIMEOUT}s (last status ${c:-none})"
+              report "health GET $HEALTH_PATH: no 2xx within ${TIMEOUT}s (last status ${c/#000/no response})"
             fi
             docker logs "$NAME" 2>&1 | tail -50
             exit 1
@@ -189,4 +191,6 @@ jobs:
 
       - name: Stop the smoke-test container
         if: always() && inputs.run-image
-        run: docker rm -f "gantry-smoke-${{ github.run_id }}-${{ github.run_attempt }}" || true
+        run: |
+          docker rm -f "gantry-smoke-${{ github.run_id }}-${{ github.run_attempt }}" || true
+          docker rmi -f "gantry-smoke:${{ github.run_id }}-${{ github.run_attempt }}" || true

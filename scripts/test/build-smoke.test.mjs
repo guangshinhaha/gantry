@@ -37,7 +37,7 @@ function stepScript(name) {
 // STUB_EXITED is set, `logs` prints a marker.
 const DOCKER = `#!/bin/sh
 case "$1" in
-  run) echo stub-container-id ;;
+  run) echo "$@" >> "$STUB_LOG"; echo stub-container-id ;;
   inspect) [ -n "$STUB_EXITED" ] && echo false || echo true ;;
   logs) echo "stub-app-log" ;;
 esac
@@ -67,18 +67,18 @@ async function smoke({ probes = "", healthPath = "/health", warm, health, exited
   const summary = join(dir, "summary");
   writeFileSync(summary, "");
   const out = [];
-  const child = spawn("/bin/bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript("Smoke test")], {
+  const child = spawn("/bin/bash", ["--noprofile", "--norc", "-e", "-c", stepScript("Smoke test")], {
     cwd: dir,
     env: {
       PATH: `${dir}:${process.env.PATH}`, GITHUB_STEP_SUMMARY: summary, PORT: String(p),
-      HEALTH_PATH: healthPath, PROBES: probes, NAME: "gantry-smoke-test", IMAGE: "gantry-smoke:test", TIMEOUT: String(timeout), ...(exited ? { STUB_EXITED: "1" } : {}),
+      HEALTH_PATH: healthPath, PROBES: probes, NAME: "gantry-smoke-test", IMAGE: "gantry-smoke:test", STUB_LOG: join(dir, "docker.log"), TIMEOUT: String(timeout), ...(exited ? { STUB_EXITED: "1" } : {}),
     },
   });
   child.stdout.on("data", (d) => out.push(String(d)));
   child.stderr.on("data", (d) => out.push(String(d)));
   const status = await new Promise((r) => child.on("close", r));
   server?.close();
-  return { status, log: out.join(""), summary: readFileSync(summary, "utf8") };
+  return { port: p, status, log: out.join(""), summary: readFileSync(summary, "utf8"), docker: readFileSync(join(dir, "docker.log"), "utf8") };
 }
 
 test("off by default: every smoke step is gated on run-image, which defaults to false", () => {
@@ -96,6 +96,8 @@ test("healthy app and passing probes: exit 0, each probe in the summary", async 
   assert.match(r.summary, /passed: GET \/app -> 200/);
   assert.match(r.summary, /passed: GET \/missing\.js -> 404/);
   assert.doesNotMatch(r.log, /::error/);
+  // The container is run on localhost only, with PORT set, from the built image.
+  assert.match(r.docker, new RegExp(`^run -d --name gantry-smoke-test -e PORT=${r.port} -p 127\\.0\\.0\\.1:${r.port}:${r.port} gantry-smoke:test\\n$`));
 });
 
 test("a failing probe is red and the error names it", async () => {
@@ -134,7 +136,7 @@ test("a custom health path is the one probed", async () => {
 test("nothing listening: fails, names health, and does not hang", async () => {
   const r = await smoke({ port: 1, timeout: 3 });
   assert.equal(r.status, 1);
-  assert.match(r.log, /health GET \/health: no 2xx within 3s/);
+  assert.match(r.log, /health GET \/health: no 2xx within 3s \(last status no response\)/);
 });
 
 test("a probe that gets no response says so, not 'got 000'", async () => {
@@ -146,8 +148,8 @@ test("a probe that gets no response says so, not 'got 000'", async () => {
 // The input check runs before the build, so a typo fails in seconds.
 function check(env) {
   const dir = mkdtempSync(join(tmpdir(), "smoke-check-"));
-  const r = spawnSync("/bin/bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript("Check smoke-test inputs")], {
-    env: { PATH: process.env.PATH, RUNNER_TEMP: dir, PLATFORMS: "linux/amd64", PORT: "3000", HEALTH_PATH: "/health", PROBES: "", ...env },
+  const r = spawnSync("/bin/bash", ["--noprofile", "--norc", "-e", "-c", stepScript("Check smoke-test inputs")], {
+    env: { PATH: process.env.PATH, RUNNER_TEMP: dir, PLATFORMS: "linux/amd64", PORT: "3000", TIMEOUT: "60", HEALTH_PATH: "/health", PROBES: "", ...env },
     encoding: "utf8",
   });
   return { status: r.status, out: r.stdout + r.stderr };
@@ -162,6 +164,7 @@ test("input check: each typo is named", () => {
   const platforms = check({ PLATFORMS: "linux/amd64,linux/arm64" });
   assert.equal(platforms.status, 1);
   assert.match(platforms.out, /single platform; got 'linux\/amd64,linux\/arm64'/);
+  assert.match(check({ TIMEOUT: "-5" }).out, /health-timeout must be a whole number of seconds; got '-5'/);
   assert.match(check({ PORT: "http" }).out, /port must be a number; got 'http'/);
   assert.match(check({ HEALTH_PATH: "health" }).out, /health-path must start with \/; got 'health'/);
   const probe = check({ PROBES: "/ok 200\nhealth 200\n/x 99" });

@@ -275,7 +275,9 @@ jobs:
 | `health-timeout` | `60` | Seconds to wait for health before failing. |
 
 `run-image` needs a single `platforms` value (the default `linux/amd64` is fine),
-because Docker can only load one platform into the runner.
+because Docker can only load one platform into the runner. It must also match
+the runner's architecture, or the container dies with an exec format error.
+The container is published on `127.0.0.1` only.
 
 **When it fails.** The job goes red and each failure is an error annotation, and
 a line in the job summary, that names the probe, for example
