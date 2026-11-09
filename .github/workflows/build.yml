@@ -10,6 +10,18 @@
 # GovPaaS (Northflank), Railway and Vercel build the image themselves; only
 # AWS apps push to ECR. A registry push may return later as an opt-in.
 # Skips itself, with a visible reason, when the repo has no Dockerfile.
+#
+# Opt-in smoke test (off unless run-image is true): loads the built image, runs
+# it, waits for health-path to answer 2xx, then checks every line of `probes`
+# ("<path> [expected status]", status defaults to 200). A failed probe fails the
+# job and the error names it, e.g. "GET /missing.js expected 404, got 200".
+#   with:
+#     run-image: true
+#     port: 3000                 # the port the container listens on
+#     health-path: /health
+#     probes: |
+#       / 200
+#       /missing.js 404
 name: gantry-build
 
 on:
@@ -28,6 +40,26 @@ on:
       platforms:
         type: string
         default: linux/amd64
+      run-image:
+        description: Opt in. Run the built image and probe it (needs a single platform)
+        type: boolean
+        default: false
+      port:
+        description: Port the container listens on (run-image only). Also passed to it as PORT
+        type: string
+        default: "3000"
+      health-path:
+        description: Path that answers 2xx once the app is up (run-image only)
+        type: string
+        default: /health
+      probes:
+        description: Extra probes, one per line, "<path> [expected status]" (run-image only)
+        type: string
+        default: ""
+      health-timeout:
+        description: Seconds to wait for health-path (run-image only)
+        type: number
+        default: 60
 
 permissions:
   contents: read
@@ -65,6 +97,16 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - name: Check smoke-test inputs
+        if: inputs.run-image
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          case "$PLATFORMS" in
+            *,*)
+              echo "::error title=Smoke test needs one platform::run-image loads the image into Docker, which takes a single platform; got '$PLATFORMS'."
+              exit 1 ;;
+          esac
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
@@ -72,5 +114,63 @@ jobs:
           file: ${{ needs.detect.outputs.file }}
           platforms: ${{ inputs.platforms }}
           push: false
+          load: ${{ inputs.run-image }}
+          tags: ${{ inputs.run-image && 'gantry-smoke:ci' || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Opt-in smoke test. Reads each probe's status with curl, keeps going after
+      # a failure so one run lists every failed probe, and fails at the end.
+      - name: Smoke test
+        if: inputs.run-image
+        env:
+          PORT: ${{ inputs.port }}
+          HEALTH_PATH: ${{ inputs.health-path }}
+          PROBES: ${{ inputs.probes }}
+          TIMEOUT: ${{ inputs.health-timeout }}
+        run: |
+          docker run -d --name gantry-smoke -e PORT="$PORT" -p "$PORT:$PORT" gantry-smoke:ci
+          base="http://localhost:$PORT"
+          fail=0
+          report() { echo "::error title=Smoke probe failed::$1"; echo "Smoke probe failed: $1" >> "$GITHUB_STEP_SUMMARY"; fail=1; }
+          code() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$base$1" || true; }
+
+          # Health: 2xx within TIMEOUT seconds, and the container still running.
+          deadline=$(( $(date +%s) + TIMEOUT ))
+          healthy=false
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if [ "$(docker inspect -f '{{.State.Running}}' gantry-smoke)" != true ]; then break; fi
+            c=$(code "$HEALTH_PATH")
+            case "$c" in 2??) healthy=true; break ;; esac
+            sleep 2
+          done
+          if [ "$healthy" = true ]; then
+            echo "Smoke probe passed: GET $HEALTH_PATH (health)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            if [ "$(docker inspect -f '{{.State.Running}}' gantry-smoke)" != true ]; then
+              report "health GET $HEALTH_PATH: the container exited before it answered"
+            else
+              report "health GET $HEALTH_PATH: no 2xx within ${TIMEOUT}s (last status ${c:-none})"
+            fi
+            docker logs gantry-smoke 2>&1 | tail -50
+            exit 1
+          fi
+
+          # Extra probes: "<path> [expected status]", blank lines and # comments skipped.
+          printf '%s\n' "$PROBES" | while read -r path want _; do
+            case "$path" in ""|"#"*) continue ;; esac
+            echo "$path ${want:-200}"
+          done > /tmp/probes
+          while read -r path want; do
+            got=$(code "$path")
+            if [ "$got" = "$want" ]; then
+              echo "Smoke probe passed: GET $path -> $got" >> "$GITHUB_STEP_SUMMARY"
+            else
+              report "GET $path expected $want, got ${got:-no response}"
+            fi
+          done < /tmp/probes
+          [ "$fail" = 0 ] || { docker logs gantry-smoke 2>&1 | tail -50; exit 1; }
+
+      - name: Stop the smoke-test container
+        if: always() && inputs.run-image
+        run: docker rm -f gantry-smoke || true
