@@ -1,8 +1,13 @@
 name: verdict-check-caller
 # gantry calls its own verdict-check, so a labelled risk:high PR needs a verifier's
 # verdict at its head. The required check is `verdict-check / verdict-check`.
+# risk-label adds risk:high to a PR that touches a High-risk path (the defaults in
+# scripts/high-risk-paths.mjs, plus .github/gantry-high-risk-paths if present), and
+# verdict-check waits for it, so the label can't be forgotten.
 # Local ref: a PR event runs the PR's own verdict-check.yml, and a comment only
 # triggers a re-run of that PR run (the comment run itself uses main's copy).
+# The scripts come from the PR's head commit, so a PR that changes them is
+# labelled by its own version.
 # (Named -caller because verdict-check.yml here is the shared workflow itself.)
 on:
   pull_request:
@@ -10,8 +15,20 @@ on:
   issue_comment:
     types: [created, edited, deleted]
 jobs:
+  risk-label:
+    if: ${{ github.event_name == 'pull_request' }}
+    uses: ./.github/workflows/risk-label.yml
+    with:
+      gantry-ref: ${{ github.event.pull_request.head.sha }}
+    permissions:
+      contents: read
+      pull-requests: write
   verdict-check:
+    needs: risk-label
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/verdict-check.yml
+    with:
+      risk-label-result: ${{ needs.risk-label.result }}
     permissions:
       actions: write
       contents: read

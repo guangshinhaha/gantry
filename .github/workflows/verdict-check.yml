@@ -16,6 +16,9 @@
 #       # with:
 #       #   label: risk:high   # the label that marks a high-risk PR
 #
+# To label PRs that touch High-risk paths automatically, add a `risk-label` job
+# ahead of this one (see risk-label.yml) and pass its result in `risk-label-result`.
+#
 # Opt-in. A PR carrying the label fails unless a PR comment holds a verifier's
 # verdict {pr, head_sha, verdict, evidence} with verdict PASS or PASS+NOTES and
 # head_sha equal to the PR's current head, and no FAIL verdict for that head is
@@ -44,6 +47,10 @@ on:
         description: PR label that marks a high-risk PR
         type: string
         default: risk:high
+      risk-label-result:
+        description: needs.risk-label.result from the caller's risk-label job; `failure` fails this check, so a failed labelling can't let a High-risk PR through
+        type: string
+        default: ""
       trusted-associations:
         description: Comma-separated author_association values whose verdict comments count
         type: string
@@ -56,7 +63,10 @@ permissions:
 
 jobs:
   verdict-check:
-    if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, inputs.label) }}
+    # No label test here: the event payload has the labels from when the run
+    # started, and risk-label may have added one since. The script reads them live
+    # and skips an unlabelled PR.
+    if: ${{ github.event_name == 'pull_request' }}
     permissions:
       contents: read
       issues: read
@@ -64,6 +74,12 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
+      - name: Fail if risk labelling failed
+        if: ${{ inputs.risk-label-result == 'failure' }}
+        run: |
+          echo "::error::The risk-label job failed, so this PR may be missing its \`risk:high\` label. Re-run the workflow."
+          exit 1
+
       - name: Require a verdict at head
         env:
           GH_TOKEN: ${{ github.token }}

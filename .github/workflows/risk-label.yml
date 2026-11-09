@@ -1,0 +1,101 @@
+# gantry risk label. Call it from the same workflow as verdict-check, ahead of it:
+#
+#   jobs:
+#     risk-label:
+#       if: ${{ github.event_name == 'pull_request' }}
+#       permissions:
+#         contents: read
+#         pull-requests: write
+#       uses: guangshinhaha/gantry/.github/workflows/risk-label.yml@main
+#     verdict-check:
+#       needs: risk-label
+#       if: ${{ !cancelled() }}
+#       with:
+#         risk-label-result: ${{ needs.risk-label.result }}
+#       ...
+#
+# Adds the `risk:high` label to a PR that changes a High-risk path, so verdict-check
+# can't be skipped because someone forgot the label. The paths are gantry's
+# defaults (scripts/high-risk-paths.mjs) plus the globs in
+# .github/gantry-high-risk-paths (one per line, `#` comments), read from the PR's
+# BASE branch so a PR can't empty the list. It only adds the label: a label a
+# person set stays, and one added here stays after the PR stops matching, until a
+# person removes it. A label added with the workflow token doesn't trigger other
+# runs, so verdict-check (which needs this job) reads the PR's live labels.
+# Skips itself for a fork PR (read-only token), with the reason in the job summary.
+name: gantry-risk-label
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: '"ubuntu-latest"'
+      gantry-ref:
+        description: gantry ref for the matching scripts
+        type: string
+        default: main
+      label:
+        description: Label to add (the one verdict-check requires)
+        type: string
+        default: risk:high
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  risk-label:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    steps:
+      - name: Decide whether to run
+        id: gate
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$PR_NUMBER" ]; then reason="not a pull request"
+          elif [ "$HEAD_REPO" != "$REPO" ]; then reason="fork PR (its token is read-only, so it cannot label)"
+          else echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "Skipping: $reason"
+          echo "Skipped: $reason" >> "$GITHUB_STEP_SUMMARY"
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          ref: ${{ github.event.pull_request.base.sha }} # trusted list; PR code is never run
+
+      - name: Add the label if a High-risk path changed
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          LABEL: ${{ inputs.label }}
+          GANTRY_REF: ${{ inputs.gantry-ref }}
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/high-risk-paths.mjs" -o /tmp/high-risk-paths.mjs
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/risky-paths.mjs" -o /tmp/risky-paths.mjs
+          # Include old names of renamed files, so moving a file out of a High-risk path is still caught.
+          gh api "repos/$REPO/pulls/$PR/files" --paginate \
+            --jq '.[] | .filename, (.previous_filename // empty)' > /tmp/changed.txt
+          node /tmp/high-risk-paths.mjs .github/gantry-high-risk-paths /tmp/changed.txt > /tmp/matches.md
+          if [ ! -s /tmp/matches.md ]; then
+            echo "No High-risk paths touched."
+            echo "No High-risk path touched: no \`$LABEL\` label added." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "### Labelled \`$LABEL\`"
+            echo
+            echo "This PR touches High-risk paths, so it needs a verifier's verdict at its head:"
+            echo
+            cat /tmp/matches.md
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          gh label create "$LABEL" --force --color B60205 \
+            --description "High-risk change: needs a verifier's verdict at head" -R "$REPO"
+          gh pr edit "$PR" --add-label "$LABEL" -R "$REPO"

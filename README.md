@@ -404,6 +404,46 @@ to the PR's current head. Without the label the check skips.
 - The check still shows its earlier result until the re-run starts, a few seconds after the comment. Don't merge in that gap.
 - It checks that a verdict exists, not that it is right or independent: the author can post their own `PASS` if they hold one of those roles. Who sets the label is up to you.
 
+### Label High-risk PRs automatically
+
+A label someone forgot to set means no check. `risk-label.yml` adds `risk:high`
+to a PR that changes a High-risk path, so verdict-check can't be skipped that
+way. `gantry-init --verdict-check` writes both jobs; in an existing caller, add
+the `risk-label` job and `needs` as in the template:
+
+```yaml
+jobs:
+  risk-label:
+    if: ${{ github.event_name == 'pull_request' }}
+    permissions: { contents: read, pull-requests: write }
+    uses: guangshinhaha/gantry/.github/workflows/risk-label.yml@main
+  verdict-check:
+    needs: risk-label
+    if: ${{ !cancelled() }}
+    with:
+      risk-label-result: ${{ needs.risk-label.result }}
+    permissions: { actions: write, contents: read, issues: read, pull-requests: read }
+    uses: guangshinhaha/gantry/.github/workflows/verdict-check.yml@main
+```
+
+- **Paths.** Always `.github/workflows/**`, `template/.github/**` and
+  `bin/gantry-protect`. A repo adds its own in `.github/gantry-high-risk-paths`
+  (one glob per line, `#` for comments, same globs as the risky-paths list), for
+  example `loop/**` and `dispatcher/**`. The file can add paths, not remove a
+  default. It is read from the **base branch**, so a PR can't empty it; a new list
+  applies once merged.
+- **Order.** verdict-check needs the `risk-label` job, and reads the PR's live
+  labels (a label added with the workflow token starts no new run, and the event
+  payload predates it). A caller without the `risk-label` job works as before.
+- **It only adds.** A label a person set stays, and so does one added here after
+  the PR stops matching, until a person removes it. If the job fails,
+  verdict-check fails with it (`risk-label-result`), so a missed label never
+  passes as a skip.
+- **Same-repo PRs only.** A fork PR's token is read-only, so the job skips and
+  the PR is not labelled.
+- The `verdict-check / verdict-check` job now runs on every PR and skips inside
+  the script when there is no label, instead of being skipped by the workflow.
+
 ## Secret scan
 
 The `secrets` job in `ci.yml` runs gitleaks (v8.30.1, default rules) over the
@@ -525,7 +565,7 @@ and no others, with the repo's local binary. It adds:
 | `.github/gantry-risky-paths` | Example list of risky globs. Edit to fit the repo. |
 | `.github/workflows/review.yml` | Second review by Claude. Only with `--review`. |
 | `.github/workflows/ac-check.yml` | Only with `--ac-check`: calls gantry's acceptance-criteria check. Kept if it already exists. |
-| `.github/workflows/verdict-check.yml` | Only with `--verdict-check`: calls gantry's verdict check, which also re-runs when a verdict comment is posted. Kept if it already exists. It blocks a merge only once `verdict-check / verdict-check` is a required check. |
+| `.github/workflows/verdict-check.yml` | Only with `--verdict-check`: calls gantry's verdict check, which also re-runs when a verdict comment is posted, and a `risk-label` job that adds `risk:high` for High-risk paths (a repo's own go in `.github/gantry-high-risk-paths`). Kept if it already exists. It blocks a merge only once `verdict-check / verdict-check` is a required check. |
 | `.github/pull_request_template.md` | PR template: `Closes #`, how I verified. With `--ac-check`, or if the repo already has `ac-check.yml`, it also has an acceptance criteria section. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
 | `.github/workflows/build.yml` | Only with `--docker`: calls gantry's build-and-verify Docker build (no push). |
@@ -555,6 +595,7 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
   review.yml    shared second review (claude-code-action) that repos call
   ac-check.yml  shared acceptance-criteria check (opt-in via --ac-check)
   verdict-check.yml  shared check that a high-risk PR has a verdict at its head (opt-in)
+  risk-label.yml  shared risk:high labelling for High-risk paths, ahead of verdict-check (opt-in)
   build.yml     shared Docker build-and-verify, no push (opt-in via --docker)
   own-ci.yml    gantry's own check on PRs and main: actionlint, template callers against
                 the shared workflows' inputs, commented-out options included
@@ -569,6 +610,7 @@ scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 preview-vercel.mjs: Vercel adapter, reads the GitHub deployment status
                 lighthouse-report.mjs: turns Lighthouse results into the PR comment section
                 risky-paths.mjs: glob matching for needs-human (tests in scripts/test/)
+                high-risk-paths.mjs: default and per-repo High-risk globs for risk:high
                 ac-check.mjs: parses PR/issue checklists (tests: ac-check.test.mjs)
                 verdict-check.mjs: finds the verdict at a PR's head (tests in scripts/test/)
                 verdict-rerun.mjs: re-runs a PR's verdict-check on a verdict comment (tests in scripts/test/)
