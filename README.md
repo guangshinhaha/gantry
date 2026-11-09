@@ -89,7 +89,8 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   (Northflank), Railway and Vercel build the image themselves, and only AWS
   apps push to ECR. A registry push may come back later as an opt-in. Without
   a Dockerfile it skips and says so (`Skipped: no Dockerfile`) in the job
-  summary.
+  summary. Add `run-image: true` to also run the image and probe it (see
+  [Docker smoke test](#docker-smoke-test-opt-in)).
 
 **Once a day** (GitHub Actions, `secrets-scan.yml`)
 - **Secret scan of every branch and all history.** It never blocks a PR. A leak
@@ -242,6 +243,53 @@ Two cases stay green and are explained in the comment: changed files that no
 test covers (it names them), and existing tests that already fail (mutation
 testing is skipped; the test job reports the failures). Only a real miss of
 `thresholds.break` turns the check red.
+
+## Docker smoke test (opt-in)
+
+`build.yml` only builds the image by default. Turn on `run-image` and it also
+loads the image, runs it, waits for health, and checks the probes you declare.
+Use it when "the image builds" isn't enough: a container that starts and
+crashes, a missing route, a static file served with the wrong status.
+
+```yaml
+jobs:
+  build:
+    uses: guangshinhaha/gantry/.github/workflows/build.yml@main
+    with:
+      run-image: true
+      port: 3000            # the port the container listens on (also passed as PORT)
+      health-path: /health  # must answer 2xx within health-timeout seconds
+      probes: |             # optional, one per line: <path> [expected status]
+        / 200
+        /missing.js 404
+    permissions:
+      contents: read
+```
+
+| Input | Default | Meaning |
+|---|---|---|
+| `run-image` | `false` | Off unless you set it. With it off, the job is unchanged. |
+| `port` | `3000` | Container port, published on the same port of the runner. |
+| `health-path` | `/health` | Polled until it answers 2xx. |
+| `probes` | none | Extra `GET` checks. The status defaults to `200`. Blank lines and `#` lines are ignored. |
+| `health-timeout` | `60` | Seconds to wait for health before failing. |
+
+`run-image` needs a single `platforms` value (the default `linux/amd64` is fine),
+because Docker can only load one platform into the runner. It must also match
+the runner's architecture, or the container dies with an exec format error.
+The container is published on `127.0.0.1` only.
+
+**When it fails.** The job goes red and each failure is an error annotation, and
+a line in the job summary, that names the probe, for example
+`GET /missing.js expected 200, got 404`, or
+`health GET /health: no 2xx within 60s (last status 500)`, or
+`health GET /health: the container exited before it answered`. A bad extra probe
+doesn't stop the others: one run lists every failed probe. The last 50 lines of
+the container log follow. A health failure stops there, since the app isn't up.
+
+**Limits.** It sends `GET` only, and it doesn't pass secrets or env vars to the
+container beyond `PORT`, so an app that needs a database or keys to start
+won't pass health. The preview smoke tests below cover a deployed app.
 
 ## Preview smoke tests
 
