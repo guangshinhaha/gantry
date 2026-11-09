@@ -92,3 +92,22 @@ test("an unreadable workflow_ref fails instead of guessing a workflow", async ()
   const f = fake();
   assert.equal((await go(f, { workflowRef: "" })).status, "fail");
 });
+
+test("a re-run GitHub refuses once (another re-run just started) is retried after the run finishes", async () => {
+  const f = fake({ runs: [wr()], states: ["in_progress", "completed"] });
+  let first = true;
+  const rerun = async (id) => {
+    if (first) { first = false; throw new Error("run is still in progress"); }
+    f.calls.rerun.push(id);
+  };
+  const r = await run({ repo: "o/r", pr: 7, assoc: "OWNER", workflowRef: REF, api: f.api, rerun, sleep: f.sleep, pollMs: 1, waitMs: 100 });
+  assert.equal(r.status, "rerun");
+  assert.deepEqual(f.calls.rerun, [1]);
+});
+
+test("a re-run that keeps failing ends as a failure, not a hang", async () => {
+  const f = fake();
+  const r = await run({ repo: "o/r", pr: 7, assoc: "OWNER", workflowRef: REF, api: f.api, rerun: async () => { throw new Error("boom"); }, sleep: f.sleep, pollMs: 1, waitMs: 100 });
+  assert.equal(r.status, "fail");
+  assert.match(r.reason, /boom/);
+});

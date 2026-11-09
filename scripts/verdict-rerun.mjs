@@ -44,13 +44,27 @@ export async function run({ repo, pr, assoc, trusted = DEFAULT_TRUSTED, workflow
   const runsPath = `repos/${repo}/actions/runs?event=pull_request&head_sha=${headSha}&per_page=100`;
   let target = pickRun((await api(runsPath)).workflow_runs, { headSha, path });
   if (!target) return { status: "skip", reason: `No ${path} run for head ${headSha.slice(0, 7)}: nothing to re-run. Push or relabel to start one.` };
-  for (let waited = 0; target.status !== "completed"; waited += pollMs) {
-    if (waited >= waitMs) return { status: "fail", reason: `Run ${target.id} was still ${target.status} after ${waitMs / 1000}s, so it can't be re-run. Re-run it by hand.` };
-    await sleep(pollMs);
-    target = await api(`repos/${repo}/actions/runs/${target.id}`);
+  // A re-run that a faster comment started a moment ago can still read as completed
+  // here, and then GitHub refuses ours. Wait for that run to finish and try again:
+  // the earlier re-run may have read the comments before this one was posted.
+  let waited = 0, lastError;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    for (; target.status !== "completed"; waited += pollMs) {
+      if (waited >= waitMs) return { status: "fail", reason: `Run ${target.id} was still ${target.status} after ${waitMs / 1000}s, so it can't be re-run. Re-run it by hand.` };
+      await sleep(pollMs);
+      target = await api(`repos/${repo}/actions/runs/${target.id}`);
+    }
+    try {
+      await rerun(target.id);
+      return { status: "rerun", reason: `Re-ran ${path} run ${target.id} for head ${headSha.slice(0, 7)}.` };
+    } catch (e) {
+      lastError = e;
+      await sleep(pollMs);
+      waited += pollMs;
+      target = await api(`repos/${repo}/actions/runs/${target.id}`);
+    }
   }
-  await rerun(target.id);
-  return { status: "rerun", reason: `Re-ran ${path} run ${target.id} for head ${headSha.slice(0, 7)}.` };
+  return { status: "fail", reason: `Could not re-run run ${target.id}: ${lastError?.message ?? lastError}` };
 }
 
 const ghJson = (path) => JSON.parse(execFileSync("gh", ["api", path], { encoding: "utf8" }));

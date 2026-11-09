@@ -79,12 +79,18 @@ jobs:
   # A comment run can't report the check itself: it runs on the default branch,
   # and the required check sits on the PR's head. It re-runs the PR's run instead.
   # The `verdict` filter skips ordinary comments; an edit is matched on the old
-  # body too, so editing a verdict into prose re-runs. The script re-checks the
-  # author, and the comment body never reaches a shell.
+  # body too, so editing a verdict into prose re-runs. The association test here
+  # only keeps strangers' comments off a runner (a substring match, so loose); the
+  # script re-checks it exactly. The comment body never reaches a shell. One
+  # re-run per PR at a time: a later comment waits, then re-reads every comment.
   rerun:
     if: >-
       ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+      contains(inputs.trusted-associations, github.event.comment.author_association) &&
       (contains(github.event.comment.body, 'verdict') || contains(github.event.changes.body.from, 'verdict')) }}
+    concurrency:
+      group: verdict-rerun-${{ github.repository }}-${{ github.event.issue.number }}
+      cancel-in-progress: false
     permissions:
       actions: write
       contents: read
