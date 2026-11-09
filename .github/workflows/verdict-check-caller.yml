@@ -6,8 +6,8 @@ name: verdict-check-caller
 # verdict-check waits for it, so the label can't be forgotten.
 # Local ref: a PR event runs the PR's own verdict-check.yml, and a comment only
 # triggers a re-run of that PR run (the comment run itself uses main's copy).
-# The scripts come from the PR's head commit, so a PR that changes them is
-# labelled by its own version.
+# The scripts come from the PR's base commit (already on main), so a PR that edits
+# the matcher is still labelled by the old one and can't skip its own label.
 # (Named -caller because verdict-check.yml here is the shared workflow itself.)
 on:
   pull_request:
@@ -19,7 +19,7 @@ jobs:
     if: ${{ github.event_name == 'pull_request' }}
     uses: ./.github/workflows/risk-label.yml
     with:
-      gantry-ref: ${{ github.event.pull_request.head.sha }}
+      gantry-ref: ${{ github.event.pull_request.base.sha }}
     permissions:
       contents: read
       pull-requests: write

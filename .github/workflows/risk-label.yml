@@ -25,6 +25,8 @@
 # A fork PR's token is read-only, so it can't be labelled: if it touches a High-risk
 # path the job fails, so it can't pass as an unlabelled PR. A PR of 3000+ files (the
 # API's cap) is labelled, since the list may be cut short.
+# The matching scripts are downloaded at `gantry-ref`, a full commit sha (default: a pinned
+# one, bumped when the scripts change), never a moving ref.
 name: gantry-risk-label
 
 on:
@@ -34,9 +36,9 @@ on:
         type: string
         default: '"ubuntu-latest"'
       gantry-ref:
-        description: gantry ref for the matching scripts
+        description: Full commit sha of gantry for the matching scripts (a branch or tag name is refused, since it can move)
         type: string
-        default: main
+        default: b06fd80534a5a0c73ec8bdc7f4cbeac29126b326
       label:
         description: Label to add (the one verdict-check requires)
         type: string
@@ -81,6 +83,11 @@ jobs:
           GANTRY_REF: ${{ inputs.gantry-ref }}
           FORK: ${{ steps.gate.outputs.fork }}
         run: |
+          # The scripts run with a write token, so they must come from a fixed commit.
+          if ! printf '%s' "$GANTRY_REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::gantry-ref must be a full 40-character commit sha, got '$GANTRY_REF'"
+            exit 1
+          fi
           curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/high-risk-paths.mjs" -o /tmp/high-risk-paths.mjs
           curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/risky-paths.mjs" -o /tmp/risky-paths.mjs
           # Include old names of renamed files, so moving a file out of a High-risk path is still caught.
