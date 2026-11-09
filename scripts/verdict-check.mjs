@@ -63,7 +63,7 @@ export function evaluate({ prNumber, headSha, labels, label = DEFAULT_LABEL, com
     for (const v of verdictsIn(c.body)) {
       if (v.head_sha.toLowerCase() !== head) continue;
       if (v.pr !== undefined && Number(v.pr) !== Number(prNumber)) continue;
-      found.push({ ...v, commentId: c.id, at: c.created_at });
+      found.push({ ...v, commentId: c.id, at: c.updated_at ?? c.created_at });
     }
   }
   if (!found.length) {
@@ -72,7 +72,7 @@ export function evaluate({ prNumber, headSha, labels, label = DEFAULT_LABEL, com
       reason: `No verdict for head ${head.slice(0, 7)} from ${trusted.join("/")}. Post {pr, head_sha, verdict, evidence} as a PR comment, then re-run this check.`,
     };
   }
-  // Order by time, then comment id, then position within the comment (stable sort).
+  // Order by last edit (an edit is a new statement), then comment id, then position within the comment (stable sort).
   found.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.commentId - b.commentId));
   const last = found[found.length - 1];
   if (last.verdict === "FAIL") {
