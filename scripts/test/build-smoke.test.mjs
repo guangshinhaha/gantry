@@ -4,7 +4,7 @@
 // reading the file, since that is what keeps the step off by default.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,6 +48,7 @@ esac
 function app({ warm = 0, health = 200 } = {}) {
   let n = 0;
   const server = createServer((req, res) => {
+    if (req.url === "/reset") return req.socket.destroy(); // curl sees no response
     let code = 404;
     if (req.url === "/health") code = n++ < warm ? 503 : health;
     else if (req.url === "/app") code = 200;
@@ -70,7 +71,7 @@ async function smoke({ probes = "", healthPath = "/health", warm, health, exited
     cwd: dir,
     env: {
       PATH: `${dir}:${process.env.PATH}`, GITHUB_STEP_SUMMARY: summary, PORT: String(p),
-      HEALTH_PATH: healthPath, PROBES: probes, TIMEOUT: String(timeout), ...(exited ? { STUB_EXITED: "1" } : {}),
+      HEALTH_PATH: healthPath, PROBES: probes, NAME: "gantry-smoke-test", IMAGE: "gantry-smoke:test", TIMEOUT: String(timeout), ...(exited ? { STUB_EXITED: "1" } : {}),
     },
   });
   child.stdout.on("data", (d) => out.push(String(d)));
@@ -134,4 +135,37 @@ test("nothing listening: fails, names health, and does not hang", async () => {
   const r = await smoke({ port: 1, timeout: 3 });
   assert.equal(r.status, 1);
   assert.match(r.log, /health GET \/health: no 2xx within 3s/);
+});
+
+test("a probe that gets no response says so, not 'got 000'", async () => {
+  const r = await smoke({ probes: "/reset 200" });
+  assert.equal(r.status, 1);
+  assert.match(r.log, /::error title=Smoke probe failed::GET \/reset expected 200, got no response/);
+});
+
+// The input check runs before the build, so a typo fails in seconds.
+function check(env) {
+  const dir = mkdtempSync(join(tmpdir(), "smoke-check-"));
+  const r = spawnSync("/bin/bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript("Check smoke-test inputs")], {
+    env: { PATH: process.env.PATH, RUNNER_TEMP: dir, PLATFORMS: "linux/amd64", PORT: "3000", HEALTH_PATH: "/health", PROBES: "", ...env },
+    encoding: "utf8",
+  });
+  return { status: r.status, out: r.stdout + r.stderr };
+}
+
+test("input check: defaults and good probes pass", () => {
+  assert.equal(check({}).status, 0);
+  assert.equal(check({ PROBES: "/ 200\n# note\n\n/missing.js 404\n/app" }).status, 0);
+});
+
+test("input check: each typo is named", () => {
+  const platforms = check({ PLATFORMS: "linux/amd64,linux/arm64" });
+  assert.equal(platforms.status, 1);
+  assert.match(platforms.out, /single platform; got 'linux\/amd64,linux\/arm64'/);
+  assert.match(check({ PORT: "http" }).out, /port must be a number; got 'http'/);
+  assert.match(check({ HEALTH_PATH: "health" }).out, /health-path must start with \/; got 'health'/);
+  const probe = check({ PROBES: "/ok 200\nhealth 200\n/x 99" });
+  assert.equal(probe.status, 1);
+  assert.match(probe.out, /probes: the path must start with \/; got 'health'/);
+  assert.match(probe.out, /probes: '\/x' has status '99'/);
 });

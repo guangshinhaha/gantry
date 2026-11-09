@@ -101,12 +101,24 @@ jobs:
         if: inputs.run-image
         env:
           PLATFORMS: ${{ inputs.platforms }}
+          PORT: ${{ inputs.port }}
+          HEALTH_PATH: ${{ inputs.health-path }}
+          PROBES: ${{ inputs.probes }}
         run: |
+          fail=0
+          bad() { echo "::error title=Smoke test input::$1"; fail=1; }
           case "$PLATFORMS" in
-            *,*)
-              echo "::error title=Smoke test needs one platform::run-image loads the image into Docker, which takes a single platform; got '$PLATFORMS'."
-              exit 1 ;;
+            *,*) bad "run-image loads the image into Docker, which takes a single platform; got '$PLATFORMS'." ;;
           esac
+          case "$PORT" in ""|*[!0-9]*) bad "port must be a number; got '$PORT'." ;; esac
+          case "$HEALTH_PATH" in /*) ;; *) bad "health-path must start with /; got '$HEALTH_PATH'." ;; esac
+          printf '%s\n' "$PROBES" | while read -r path want _; do
+            case "$path" in ""|"#"*) continue ;; esac
+            case "$path" in /*) ;; *) echo "probes: the path must start with /; got '$path'." ;; esac
+            case "${want:-200}" in [1-5][0-9][0-9]) ;; *) echo "probes: '$path' has status '$want', which is not an HTTP status." ;; esac
+          done > "$RUNNER_TEMP/probe-errors"
+          while read -r line; do bad "$line"; done < "$RUNNER_TEMP/probe-errors"
+          exit "$fail"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
@@ -115,7 +127,7 @@ jobs:
           platforms: ${{ inputs.platforms }}
           push: false
           load: ${{ inputs.run-image }}
-          tags: ${{ inputs.run-image && 'gantry-smoke:ci' || '' }}
+          tags: ${{ inputs.run-image && format('gantry-smoke:{0}-{1}', github.run_id, github.run_attempt) || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -128,8 +140,10 @@ jobs:
           HEALTH_PATH: ${{ inputs.health-path }}
           PROBES: ${{ inputs.probes }}
           TIMEOUT: ${{ inputs.health-timeout }}
+          NAME: gantry-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          IMAGE: gantry-smoke:${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          docker run -d --name gantry-smoke -e PORT="$PORT" -p "$PORT:$PORT" gantry-smoke:ci
+          docker run -d --name "$NAME" -e PORT="$PORT" -p "$PORT:$PORT" "$IMAGE"
           base="http://localhost:$PORT"
           fail=0
           report() { echo "::error title=Smoke probe failed::$1"; echo "Smoke probe failed: $1" >> "$GITHUB_STEP_SUMMARY"; fail=1; }
@@ -139,7 +153,7 @@ jobs:
           deadline=$(( $(date +%s) + TIMEOUT ))
           healthy=false
           while [ "$(date +%s)" -lt "$deadline" ]; do
-            if [ "$(docker inspect -f '{{.State.Running}}' gantry-smoke)" != true ]; then break; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' "$NAME")" != true ]; then break; fi
             c=$(code "$HEALTH_PATH")
             case "$c" in 2??) healthy=true; break ;; esac
             sleep 2
@@ -147,30 +161,32 @@ jobs:
           if [ "$healthy" = true ]; then
             echo "Smoke probe passed: GET $HEALTH_PATH (health)" >> "$GITHUB_STEP_SUMMARY"
           else
-            if [ "$(docker inspect -f '{{.State.Running}}' gantry-smoke)" != true ]; then
+            if [ "$(docker inspect -f '{{.State.Running}}' "$NAME")" != true ]; then
               report "health GET $HEALTH_PATH: the container exited before it answered"
             else
               report "health GET $HEALTH_PATH: no 2xx within ${TIMEOUT}s (last status ${c:-none})"
             fi
-            docker logs gantry-smoke 2>&1 | tail -50
+            docker logs "$NAME" 2>&1 | tail -50
             exit 1
           fi
 
           # Extra probes: "<path> [expected status]", blank lines and # comments skipped.
+          list=$(mktemp)
           printf '%s\n' "$PROBES" | while read -r path want _; do
             case "$path" in ""|"#"*) continue ;; esac
             echo "$path ${want:-200}"
-          done > /tmp/probes
+          done > "$list"
           while read -r path want; do
             got=$(code "$path")
             if [ "$got" = "$want" ]; then
               echo "Smoke probe passed: GET $path -> $got" >> "$GITHUB_STEP_SUMMARY"
             else
-              report "GET $path expected $want, got ${got:-no response}"
+              [ "$got" != 000 ] || got="no response"
+              report "GET $path expected $want, got $got"
             fi
-          done < /tmp/probes
-          [ "$fail" = 0 ] || { docker logs gantry-smoke 2>&1 | tail -50; exit 1; }
+          done < "$list"
+          [ "$fail" = 0 ] || { docker logs "$NAME" 2>&1 | tail -50; exit 1; }
 
       - name: Stop the smoke-test container
         if: always() && inputs.run-image
-        run: docker rm -f gantry-smoke || true
+        run: docker rm -f "gantry-smoke-${{ github.run_id }}-${{ github.run_attempt }}" || true
