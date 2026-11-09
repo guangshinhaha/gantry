@@ -421,7 +421,7 @@ Treat a green scan as "no key in a form gitleaks knows", not "no key".
 automatic merge of its parents (`--diff-merges=remerge`), so a key added while
 resolving a conflict, or in an evil merge, fails the scan. A clean merge adds
 nothing, so main merged back into a PR branch doesn't bring main's history into
-the scan. The daily scan doesn't read merge commits this way.
+the scan. Git skips this for octopus merges (three or more parents), so a key added only in one isn't seen. The daily scan doesn't read merge commits this way.
 
 **What a PR can't change for itself.** The scan runs with the base branch's
 `.gitleaks.toml` and `.gitleaksignore` (gitleaks' default rules if the base has
