@@ -21,17 +21,17 @@ export function workflowPath(ref) {
   return m ? m[1] : null;
 }
 
-/** The newest pull_request run of `path` at `headSha`, or undefined. */
-export function pickRun(runs, { headSha, path, pr }) {
+/** Every pull_request run of `path` at `headSha` for this PR, newest first. */
+export function pickRuns(runs, { headSha, path, pr }) {
   // Two PRs can share a head; a run that lists its PRs must list this one.
   const ofPr = (r) => !r.pull_requests?.length || r.pull_requests.some((p) => Number(p.number) === Number(pr));
   return runs
     .filter((r) => r.event === "pull_request" && r.path === path && r.head_sha.toLowerCase() === headSha.toLowerCase() && ofPr(r))
-    .sort((a, b) => b.run_number - a.run_number || b.run_attempt - a.run_attempt)[0];
+    .sort((a, b) => b.run_number - a.run_number || b.run_attempt - a.run_attempt);
 }
 
 /**
- * Re-run the PR's latest verdict-check run. Returns { status, reason } where status
+ * Re-run the PR's verdict-check runs at its head. Returns { status, reason } where status
  * is "rerun", "skip" or "fail". `api(path)` returns parsed JSON, `rerun(id)` re-runs
  * all jobs of a run, `sleep(ms)` waits. A run still in progress can't be re-run, so
  * this waits for it to finish first (its own result may predate the comment).
@@ -44,29 +44,43 @@ export async function run({ repo, pr, assoc, trusted = DEFAULT_TRUSTED, workflow
   if (pull.state !== "open") return { status: "skip", reason: `PR #${pr} is ${pull.state}: nothing to re-run.` };
   const headSha = pull.head.sha;
   const runsPath = `repos/${repo}/actions/runs?event=pull_request&head_sha=${headSha}&per_page=100`;
-  let target = pickRun((await api(runsPath)).workflow_runs, { headSha, path, pr });
-  if (!target) return { status: "skip", reason: `No ${path} run for head ${headSha.slice(0, 7)}: nothing to re-run. Push or relabel to start one.` };
+  const targets = pickRuns((await api(runsPath)).workflow_runs, { headSha, path, pr });
+  if (!targets.length) return { status: "skip", reason: `No ${path} run for head ${headSha.slice(0, 7)}: nothing to re-run. Push or relabel to start one.` };
+  // A PR opened with its label gets one run per event (opened, labeled) at the same head,
+  // and each reports a check of the same name. Re-run all of them, or an old red one
+  // stays behind and the combined result stays red after a PASS. Each re-run re-reads
+  // the live comments and labels.
+  const ids = [];
+  for (const t of targets) {
+    const r = await rerunOne(t);
+    if (r.status === "fail") return r;
+    ids.push(t.id);
+  }
+  return { status: "rerun", reason: `Re-ran ${path} run${ids.length > 1 ? "s" : ""} ${ids.join(", ")} for head ${headSha.slice(0, 7)}.` };
+
   // A re-run that a faster comment started a moment ago can still read as completed
   // here, and then GitHub refuses ours. Wait for that run to finish and try again:
   // the earlier re-run may have read the comments before this one was posted.
-  let waited = 0, lastError;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    for (; target.status !== "completed"; waited += pollMs) {
-      if (waited >= waitMs) return { status: "fail", reason: `Run ${target.id} was still ${target.status} after ${waitMs / 1000}s, so it can't be re-run. Re-run it by hand.` };
-      await sleep(pollMs);
-      target = await api(`repos/${repo}/actions/runs/${target.id}`);
+  async function rerunOne(target) {
+    let waited = 0, lastError;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      for (; target.status !== "completed"; waited += pollMs) {
+        if (waited >= waitMs) return { status: "fail", reason: `Run ${target.id} was still ${target.status} after ${waitMs / 1000}s, so it can't be re-run. Re-run it by hand.` };
+        await sleep(pollMs);
+        target = await api(`repos/${repo}/actions/runs/${target.id}`);
+      }
+      try {
+        await rerun(target.id);
+        return { status: "rerun" };
+      } catch (e) {
+        lastError = e;
+        await sleep(pollMs);
+        waited += pollMs;
+        target = await api(`repos/${repo}/actions/runs/${target.id}`);
+      }
     }
-    try {
-      await rerun(target.id);
-      return { status: "rerun", reason: `Re-ran ${path} run ${target.id} for head ${headSha.slice(0, 7)}.` };
-    } catch (e) {
-      lastError = e;
-      await sleep(pollMs);
-      waited += pollMs;
-      target = await api(`repos/${repo}/actions/runs/${target.id}`);
-    }
+    return { status: "fail", reason: `Could not re-run run ${target.id}: ${lastError?.message ?? lastError}` };
   }
-  return { status: "fail", reason: `Could not re-run run ${target.id}: ${lastError?.message ?? lastError}` };
 }
 
 const ghJson = (path) => JSON.parse(execFileSync("gh", ["api", path], { encoding: "utf8" }));

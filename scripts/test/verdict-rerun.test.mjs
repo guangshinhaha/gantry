@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pickRun, run, workflowPath } from "../verdict-rerun.mjs";
+import { pickRuns, run, workflowPath } from "../verdict-rerun.mjs";
 
 const HEAD = "a".repeat(40);
 const PATH = ".github/workflows/verdict-check.yml";
@@ -27,7 +27,7 @@ test("workflowPath reads the caller's file from workflow_ref", () => {
   assert.equal(workflowPath(undefined), null);
 });
 
-test("pickRun takes the newest pull_request run of this workflow at the head", () => {
+test("pickRuns takes every pull_request run of this workflow at the head, newest first", () => {
   const runs = [
     wr({ id: 1, run_number: 3 }),
     wr({ id: 2, run_number: 5 }),
@@ -35,8 +35,8 @@ test("pickRun takes the newest pull_request run of this workflow at the head", (
     wr({ id: 4, run_number: 9, event: "issue_comment" }),
     wr({ id: 5, run_number: 9, head_sha: "b".repeat(40) }),
   ];
-  assert.equal(pickRun(runs, { headSha: HEAD, path: PATH }).id, 2);
-  assert.equal(pickRun([], { headSha: HEAD, path: PATH }), undefined);
+  assert.deepEqual(pickRuns(runs, { headSha: HEAD, path: PATH }).map((r) => r.id), [2, 1]);
+  assert.deepEqual(pickRuns([], { headSha: HEAD, path: PATH }), []);
 });
 
 test("a trusted comment re-runs the PR's run", async () => {
@@ -117,4 +117,11 @@ test("two PRs at one head: a comment on one re-runs that PR's run", async () => 
   const f = fake({ runs });
   assert.equal((await go(f)).status, "rerun");
   assert.deepEqual(f.calls.rerun, [100]);
+});
+
+test("a PR opened with its label has two runs at the head: both are re-run, so no stale red check stays", async () => {
+  const f = fake({ runs: [wr({ id: 10, run_number: 1 }), wr({ id: 11, run_number: 2 })] });
+  const r = await go(f);
+  assert.equal(r.status, "rerun");
+  assert.deepEqual(f.calls.rerun, [11, 10]);
 });

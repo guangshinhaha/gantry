@@ -23,7 +23,7 @@
 # label skips. Only comments from OWNER, MEMBER or COLLABORATOR count, so a
 # stranger cannot post a PASS. It does not judge whether a verdict is right.
 #
-# A verdict comment (posted, edited or deleted) re-runs the PR's latest run of
+# A verdict comment (posted, edited or deleted) re-runs the PR's runs at its head of
 # the calling workflow, so the check turns green or red without a manual
 # re-run. The comment event runs on the default branch, which is why the caller
 # must be on the default branch, and why it needs actions: write. Until the
