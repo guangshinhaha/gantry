@@ -2,12 +2,12 @@
 # Apply gantry to a repo: lefthook.yml, CI workflow, CLAUDE.md skeleton.
 # Never overwrites existing files. Safe to re-run. Formats only the files it adds.
 #
-#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--ac-check] [--preview [railway|vercel]]
+#   gantry-init [repo-dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--ac-check] [--verdict-check] [--preview [railway|vercel]]
 set -e
 
 GANTRY_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="."
-PREVIEW=""; PREVIEW_FLAG=0; PRISMA=0; NEXTJS=0; MUTATION=1; REVIEW=0; DOCKER=0; AC_CHECK=0
+PREVIEW=""; PREVIEW_FLAG=0; PRISMA=0; NEXTJS=0; MUTATION=1; REVIEW=0; DOCKER=0; AC_CHECK=0; VERDICT_CHECK=0
 WANT_PV=0
 for arg in "$@"; do
   if [ "$WANT_PV" = 1 ]; then
@@ -22,6 +22,7 @@ for arg in "$@"; do
     --review) REVIEW=1 ;;
     --docker) DOCKER=1 ;;
     --ac-check) AC_CHECK=1 ;;
+    --verdict-check) VERDICT_CHECK=1 ;;
     *) TARGET="$arg" ;;
   esac
 done
@@ -95,6 +96,14 @@ if [ "$AC_CHECK" = 1 ]; then
     echo "  ! .github/pull_request_template.md has no Acceptance criteria section. ac-check fails a PR that closes an issue with a checklist unless the PR body repeats it."
 else
   copy "$GANTRY_DIR/template/.github/pull_request_template.md" .github/pull_request_template.md
+fi
+
+# Verdict check: opt-in. Fails a risk:high PR until a verifier's verdict for its
+# head is posted, and re-runs when one is. It only blocks a merge once
+# `verdict-check / verdict-check` is a required check (gantry-protect --require).
+if [ "$VERDICT_CHECK" = 1 ]; then
+  copy "$GANTRY_DIR/template/.github/workflows/verdict-check.yml" .github/workflows/verdict-check.yml
+  echo "  ! verdict-check blocks a merge only if it is a required check: gantry-protect --require 'verdict-check / verdict-check'"
 fi
 
 copy "$GANTRY_DIR/template/CLAUDE.md" CLAUDE.md

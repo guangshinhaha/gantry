@@ -84,6 +84,32 @@ test("--ac-check stays quiet when the existing template has the section", () =>
     assert.doesNotMatch(init(dir, "--ac-check"), /! .*pull_request_template/);
   }));
 
+const VERDICT = ".github/workflows/verdict-check.yml";
+
+test("no flag: no verdict-check workflow", () =>
+  withRepo((dir) => {
+    init(dir);
+    assert.equal(existsSync(join(dir, VERDICT)), false);
+  }));
+
+test("--verdict-check: adds a caller that also runs on verdict comments, and says it must be required", () =>
+  withRepo((dir) => {
+    const out = init(dir, "--verdict-check");
+    const wf = read(dir, VERDICT);
+    assert.match(wf, /guangshinhaha\/gantry\/\.github\/workflows\/verdict-check\.yml@main/);
+    assert.match(wf, /^ {2}issue_comment:/m);
+    assert.match(wf, /^ {6}actions: write$/m, "the re-run needs actions: write");
+    assert.match(out, /required check.*verdict-check \/ verdict-check/);
+  }));
+
+test("--verdict-check keeps an existing workflow", () =>
+  withRepo((dir) => {
+    put(dir, VERDICT, "# customised\n");
+    const out = init(dir, "--verdict-check");
+    assert.equal(read(dir, VERDICT), "# customised\n");
+    assert.match(out, /keep\s+\.github\/workflows\/verdict-check\.yml/);
+  }));
+
 // A stand-in formatter: records the arguments it got, one per line.
 function installFormatter(dir, name, exitCode = 0) {
   put(dir, `node_modules/.bin/${name}`, `#!/bin/sh\nprintf '%s\\n' "$@" > ${name}.args\nexit ${exitCode}\n`);
