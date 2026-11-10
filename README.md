@@ -73,13 +73,15 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   PR scans the pushed commits. A PR can't loosen the scan for itself; see
   [Secret scan](#secret-scan).
 - **A push that is a merged PR skips every job**, but only when a PR merged
-  into the pushed branch and its head had a green `ci-ok`. A PR merged into
-  another branch, or one whose CI was red (an admin merge, or a re-run of the
-  red push), runs the checks. Reading the PR's checks needs no extra
+  into the pushed branch, its head had a green `ci-ok`, and the branch's
+  previous head (`BEFORE`) had a green `ci-ok` too (gantry#117). A PR merged
+  into another branch, one whose CI was red (an admin merge, or a re-run of the
+  red push), or one merged into a red or unchecked branch runs the checks, so a
+  green PR can't turn a red branch green. Reading the PR's checks needs no extra
   permission on a public repo. A private repo's caller must grant
   `checks: read`, or the skip never fires and every push runs the checks. The
-  docs-only push skip reads the previous head's `ci-ok` the same way (gantry#110),
-  so it needs `checks: read` on a private repo too.
+  previous-head `ci-ok` read for this skip and for the docs-only push skip
+  (gantry#110) needs `checks: read` on a private repo too.
 - **A retargeted PR re-runs `ci`.** The template caller listens for `edited`,
   the only event GitHub sends when a PR's base changes. An edit that leaves the
   base alone (title, body) skips the caller's job and can't cancel a run in
