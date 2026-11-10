@@ -176,6 +176,22 @@ jobs:
 `node: false` also needs that workflow's job required with `gantry-protect
 --require` (see [Blocking merges on red CI](#blocking-merges-on-red-ci)).
 
+## Generated code is up to date
+
+Set `codegen-command` and the node job runs it after install, then fails if it
+changed or added any file git would commit: the committed generated files are
+stale. The error and the run's summary list each changed file. Without the
+input the step skips and the summary says `Skipped: no codegen-command given`.
+
+```yaml
+    with:
+      codegen-command: pnpm prisma generate   # or: make generate
+```
+
+It lives in the node job, so it follows that job's skips (`node: false`, no
+root `package.json`, docs-only changes). Gitignored output isn't checked,
+since it isn't committed.
+
 ## Blocking merges on red CI
 
 CI alone doesn't stop a merge. To make `gantry / ci-ok` required on a repo's

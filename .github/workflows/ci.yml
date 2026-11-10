@@ -26,6 +26,10 @@ on:
         description: Set to false to turn the node job off, for a repo whose own workflow runs its tests
         type: boolean
         default: true
+      codegen-command:
+        description: 'Command that regenerates committed generated files (e.g. "pnpm prisma generate", "make generate"). The node job runs it after install and fails if it changes any file git tracks or adds one. Empty skips the check.'
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -472,6 +476,38 @@ jobs:
           else
             echo "Unit tests skipped: no test script" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+
+      # Opt-in (gantry#19): runs the caller's codegen-command and fails when
+      # that changes the tree, i.e. the committed generated files are stale.
+      # The tree is snapshotted as a git tree object before and after (`git add
+      # -A` in this throwaway checkout), so a file the install already touched
+      # isn't blamed on codegen, a file codegen adds counts as well as one it
+      # edits, and gitignored output is left out because it isn't committed.
+      - name: Generated code is up to date
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          CODEGEN: ${{ inputs.codegen-command }}
+        run: |
+          if [ -z "$CODEGEN" ]; then
+            echo "Skipped: no codegen-command given" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git add -A
+          before=$(git write-tree)
+          if ! bash -c "$CODEGEN"; then
+            echo "::error::codegen-command failed: $CODEGEN"
+            exit 1
+          fi
+          git add -A
+          after=$(git write-tree)
+          if [ "$before" != "$after" ]; then
+            changed=$(git diff --name-status --no-renames "$before" "$after")
+            echo "::error::Generated code is out of date: \`$CODEGEN\` changed files that are committed. Run it and commit the result."
+            echo "$changed"
+            { echo "Generated code is out of date. \`$CODEGEN\` changed:"; echo '```'; echo "$changed"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Generated code is up to date."
 
       - name: Dependency audit (high+)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
