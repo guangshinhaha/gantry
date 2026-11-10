@@ -73,6 +73,14 @@ jobs:
         run: |
           merged_pr=false
           docs_only=false
+          # Every github-actions ci-ok at $1 is green, and there is at least one.
+          # Any doubt (API error, caller token that can't read checks) is "no".
+          ci_ok_green() {
+            local g
+            g=$(gh api "repos/$REPO/commits/$1/check-runs?filter=latest&per_page=100" \
+              --jq '[.check_runs[] | select(.app.slug == "github-actions" and (.name | test("(^| / )ci-ok$")))] | if length > 0 and all(.[]; .conclusion == "success") then 1 else 0 end' 2>/dev/null) || g=0
+            [ "${g:-0}" -gt 0 ]
+          }
           if [ "$EVENT" = push ]; then
             # Skip only on proof the checks already passed: a PR that merged
             # into this very branch (gantry#63) and whose head had a green
@@ -85,9 +93,7 @@ jobs:
             heads=$(gh api "repos/$REPO/commits/$SHA/pulls?per_page=100" \
               --jq '.[] | select(.merged_at != null and ("refs/heads/" + .base.ref) == env.PUSHED_REF) | .head.sha') || heads=""
             for head in $heads; do
-              green=$(gh api "repos/$REPO/commits/$head/check-runs?filter=latest&per_page=100" \
-                --jq '[.check_runs[] | select(.app.slug == "github-actions" and (.name | test("(^| / )ci-ok$")))] | if length > 0 and all(.[]; .conclusion == "success") then 1 else 0 end' 2>/dev/null) || green=0
-              if [ "${green:-0}" -gt 0 ]; then merged_pr=true; echo "Already tested in its PR (ci-ok was green at ${head:0:7})."; break; fi
+              if ci_ok_green "$head"; then merged_pr=true; echo "Already tested in its PR (ci-ok was green at ${head:0:7})."; break; fi
             done
             if [ "$merged_pr" = false ] && [ -n "$heads" ]; then
               echo "A PR merged into this branch, but none had a green ci-ok at its head, so the checks run."
@@ -144,7 +150,14 @@ jobs:
                       printf '%s\n' "$files" | grep -E '^docs/' | grep -vE '\.md$' | grep -vE "$docfile"
                     } || true)
             if [ "$complete" = true ] && [ -n "$files" ] && [ -z "$other" ]; then
-              docs_only=true; echo "Docs-only change, running only the secret scan."
+              # A docs commit on top of a head that was not green would hide the
+              # break under it, because the list shows only the new commits. On a
+              # push the previous head must have had a green ci-ok (gantry#110).
+              if [ "$EVENT" = push ] && ! ci_ok_green "$BEFORE"; then
+                echo "Docs-only push, but ci-ok was not green at ${BEFORE:0:7}, so the checks run."
+              else
+                docs_only=true; echo "Docs-only change, running only the secret scan."
+              fi
             fi
           fi
           run_node=false
