@@ -429,3 +429,31 @@ test("a skipped node job says codegen-command did not run, only when one is set"
   const unset = runGate({ root: 404, tree: ["README.md"] });
   assert.doesNotMatch(unset.summary, /codegen/);
 });
+
+// gantry#117: the PR head's ci-ok says nothing about the base it merged into.
+// A green PR merged into a red branch must not turn the branch green.
+test("gantry#117: a green merged PR into a red base doesn't skip", () => {
+  const r = pushRun({ merged: [prInto("main")], checks: ciOk("success"), checksBefore: ciOk("failure") });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.merged_pr, "false");
+  assert.equal(r.outputs.run_node, "true");
+});
+
+test("gantry#117: a green docs-only PR merged into a red base runs node", () => {
+  const r = runGate({
+    root: 200, event: "push", compare: ["docs/a.md"], merged: [prInto("main")],
+    checks: ciOk("success"), checksBefore: ciOk("failure"),
+  });
+  assert.equal(r.outputs.merged_pr, "false");
+  assert.equal(r.outputs.run_node, "true");
+});
+
+test("gantry#117: a merged PR whose base has no ci-ok or an unreadable one doesn't skip", () => {
+  assert.equal(pushRun({ merged: [prInto("main")], checks: ciOk("success"), checksBefore: { check_runs: [] } }).outputs.merged_pr, "false");
+  assert.equal(pushRun({ merged: [prInto("main")], checks: ciOk("success"), checksBefore: "fail" }).outputs.merged_pr, "false");
+});
+
+test("gantry#117: green PR head and green base still skip", () => {
+  const r = pushRun({ merged: [prInto("main")], checks: ciOk("success"), checksBefore: ciOk("success") });
+  assert.equal(r.outputs.merged_pr, "true");
+});
