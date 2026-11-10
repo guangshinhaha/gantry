@@ -37,8 +37,8 @@ permissions:
 
 jobs:
   # Decides which real jobs run. A push that is a merged PR skips them all, but
-  # only if the PR merged into the pushed branch and its head had a green ci-ok
-  # (gantry#63, #64); otherwise its CI proves nothing about this push. A change that only
+  # only if the PR merged into the pushed branch and both its head and the branch's
+  # previous head had a green ci-ok (gantry#63, #64, #117); otherwise its CI proves nothing about this push. A change that only
   # touches docs skips everything except the secret scan, because a key can be
   # pasted into a doc. "Only docs" means *.md and docs or images under docs/,
   # counting both names of a rename, and never a file list the API may have cut
@@ -92,6 +92,13 @@ jobs:
             # checks, runs the checks instead.
             heads=$(gh api "repos/$REPO/commits/$SHA/pulls?per_page=100" \
               --jq '.[] | select(.merged_at != null and ("refs/heads/" + .base.ref) == env.PUSHED_REF) | .head.sha') || heads=""
+            # The PR's ci-ok covers the PR, not the base it merged into: a green
+            # PR merged into a red branch would turn it green over the break. So
+            # the previous head must have had a green ci-ok too (gantry#117).
+            if [ -n "$heads" ] && ! ci_ok_green "$BEFORE"; then
+              echo "A PR merged into this branch, but ci-ok was not green at ${BEFORE:0:7}, so the checks run."
+              heads=""
+            fi
             for head in $heads; do
               if ci_ok_green "$head"; then merged_pr=true; echo "Already tested in its PR (ci-ok was green at ${head:0:7})."; break; fi
             done
