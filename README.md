@@ -77,7 +77,9 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   another branch, or one whose CI was red (an admin merge, or a re-run of the
   red push), runs the checks. Reading the PR's checks needs no extra
   permission on a public repo. A private repo's caller must grant
-  `checks: read`, or the skip never fires and every push runs the checks.
+  `checks: read`, or the skip never fires and every push runs the checks. The
+  docs-only push skip reads the previous head's `ci-ok` the same way (gantry#110),
+  so it needs `checks: read` on a private repo too.
 - **A retargeted PR re-runs `ci`.** The template caller listens for `edited`,
   the only event GitHub sends when a PR's base changes. An edit that leaves the
   base alone (title, body) skips the caller's job and can't cancel a run in

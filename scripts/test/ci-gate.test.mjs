@@ -39,6 +39,8 @@ case "$*" in
   *"/pulls/"*) printf '%s' "$STUB_PR" | jq -r "$(filter "$@")" ;;
   *"/compare/"*) [ "$STUB_COMPARE" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }; f=$(filter "$@"); printf '%s' "$STUB_COMPARE" | jq -r "\${f:-.}" ;;
   *"/commits/"*"/pulls"*) [ "$STUB_MERGED" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_MERGED" | jq -r "$(filter "$@")" ;;
+  *"/commits/def/check-runs"*) [ -n "$STUB_CHECKS_BEFORE" ] && { [ "$STUB_CHECKS_BEFORE" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_CHECKS_BEFORE" | jq -r "$(filter "$@")"; exit 0; }
+     [ "$STUB_CHECKS" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_CHECKS" | jq -r "$(filter "$@")" ;;
   *"/commits/"*"/check-runs"*) [ "$STUB_CHECKS" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_CHECKS" | jq -r "$(filter "$@")" ;;
   *"/contents/package.json"*)
     case "$STUB_ROOT" in
@@ -69,7 +71,7 @@ esac
 function runGate({
   root, tree = [], truncated = false, treeFails = false, treeBody = "", gitPaths = null, node = "true", codegen = "false",
   files = ["src/x.ts"], changed = files.length, event = "pull_request", compare = [], compareStatus = "ahead", merged = [],
-  ref = "refs/heads/main", checks = { check_runs: [] },
+  ref = "refs/heads/main", checks = { check_runs: [] }, checksBefore = "",
 }) {
   const entry = (f) => (typeof f === "string" ? { filename: f } : f);
   const dir = mkdtempSync(join(tmpdir(), "gantry-gate-"));
@@ -93,7 +95,7 @@ function runGate({
         REPO: "o/r", EVENT: event, PR: "1", SHA: "abc", BEFORE: event === "push" ? "def" : "",
         STUB_FILES: JSON.stringify(files.map(entry)), STUB_PR: JSON.stringify({ changed_files: changed }),
         STUB_COMPARE: compare === "fail" ? "fail" : JSON.stringify({ status: compareStatus, files: compare.map(entry) }), STUB_MERGED: merged === "fail" ? "fail" : JSON.stringify(merged),
-        PUSHED_REF: ref, STUB_CHECKS: checks === "fail" ? "fail" : JSON.stringify(checks),
+        PUSHED_REF: ref, STUB_CHECKS_BEFORE: checksBefore === "fail" ? "fail" : checksBefore ? JSON.stringify(checksBefore) : "", STUB_CHECKS: checks === "fail" ? "fail" : JSON.stringify(checks),
         NODE_INPUT: node, HAS_CODEGEN: codegen, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
         LANG: "C.UTF-8", RUNNER_TEMP: dir, GITHUB_SERVER_URL: "https://github.com", GH_TOKEN: "t",
       },
@@ -275,7 +277,7 @@ test("gate, PR: renames don't throw the count off", () => {
 const docs = (n) => Array.from({ length: n }, (_, i) => `docs/many/f${i}.md`);
 // gantry#110: a docs-only push needs a green ci-ok at the previous head.
 const greenBefore = { check_runs: [{ name: "gantry / ci-ok", conclusion: "success", app: { slug: "github-actions" } }] };
-const push = (compare, checks = greenBefore) => run({ event: "push", compare, checks });
+const push = (compare, checks = greenBefore) => run({ event: "push", compare, checksBefore: checks });
 test("gate, push: 299 docs files are docs-only", () => assert.equal(push(docs(299)), "false"));
 test("gate, push: 300 docs files may hide code, so node runs", () => assert.equal(push(docs(300)), "true"));
 test("gate, push: code in the list runs node", () => assert.equal(push(["docs/a.md", "src/x.ts"]), "true"));
@@ -286,7 +288,7 @@ test("gate, push: a code file under docs/ runs node", () => assert.equal(push(["
 test("gate, push: a failed compare is not docs-only", () => assert.equal(push("fail"), "true"));
 // gantry#90: after a force-push, compare lists only the commits since the fork,
 // so a code change the old and new tips share is missing from the list.
-const pushStatus = (compareStatus) => runGate({ root: 200, event: "push", compare: ["docs/a.md"], compareStatus, checks: greenBefore }).outputs.run_node;
+const pushStatus = (compareStatus) => runGate({ root: 200, event: "push", compare: ["docs/a.md"], compareStatus, checksBefore: greenBefore }).outputs.run_node;
 test("gate, push: a fast-forward docs push is docs-only", () => assert.equal(pushStatus("ahead"), "false"));
 test("gate, push: a force-push (diverged) of a docs commit runs node", () => assert.equal(pushStatus("diverged"), "true"));
 test("gate, push: a rewind (behind) runs node", () => assert.equal(pushStatus("behind"), "true"));
@@ -306,6 +308,13 @@ test("gate, push: one red ci-ok among green ones runs node", () => {
 });
 test("gate, push: a green lookalike from another app does not count", () => {
   assert.equal(push(["docs/a.md"], { check_runs: [{ name: "gantry / ci-ok", conclusion: "success", app: { slug: "x" } }] }), "true");
+});
+// The previous head's ci-ok is what counts, not the new head's.
+test("gate, push: green at the new head but red at BEFORE runs node", () => {
+  assert.equal(runGate({ root: 200, event: "push", compare: ["docs/a.md"], checks: greenBefore, checksBefore: redBefore }).outputs.run_node, "true");
+});
+test("gate, push: red at the new head but green at BEFORE is docs-only", () => {
+  assert.equal(runGate({ root: 200, event: "push", compare: ["docs/a.md"], checks: redBefore, checksBefore: greenBefore }).outputs.run_node, "false");
 });
 test("gate, PR: docs-only is unaffected by checks (the PR lists everything)", () => {
   assert.equal(run({ files: ["docs/a.md"], checks: redBefore }), "false");
