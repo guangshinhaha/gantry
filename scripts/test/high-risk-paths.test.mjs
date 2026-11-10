@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_GLOBS, highRisk } from "../high-risk-paths.mjs";
@@ -43,4 +43,10 @@ test("CLI: prints the matches, nothing for a clean change; the list file may be 
   assert.doesNotMatch(out, /README/);
   writeFileSync(changed, "README.md\n");
   assert.equal(execFileSync("node", [script, join(dir, "no-such-list"), changed], { encoding: "utf8" }), "");
+});
+
+test("gantry's own list marks the factory config, skills and backlog adapter High", () => {
+  const list = readFileSync(new URL("../../.github/gantry-high-risk-paths", import.meta.url), "utf8");
+  const hits = highRisk([".noodle.toml", ".agents/skills/execute/SKILL.md", "adapters/github/backlog.sh", "README.md"], list).map((h) => h.file);
+  assert.deepEqual(hits, [".noodle.toml", ".agents/skills/execute/SKILL.md", "adapters/github/backlog.sh"]);
 });

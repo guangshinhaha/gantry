@@ -2,3 +2,7 @@
 .github/gantry-high-risk-paths
 scripts/high-risk-paths.mjs
 scripts/risky-paths.mjs
+# The shinfactory loop's own config, skills and backlog adapter: a change here steers the factory, so it needs a High-tier verdict.
+.noodle.toml
+.agents/skills/**
+adapters/**
