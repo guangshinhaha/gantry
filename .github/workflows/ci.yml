@@ -261,11 +261,13 @@ jobs:
       # resolving a conflict, or in an evil merge, is seen, and a clean merge
       # adds nothing (gantry#69, #84). --text makes git diff a file even when
       # it looks binary (a NUL byte, or `-diff`), which would hide it from
-      # gitleaks. It costs time on a PR that adds big binaries (27s for 54MB in the case behind gantry#104),
-      # and that is kept on purpose (gantry#104): skipping binary extensions or
-      # capping size would let a key hide in a file named x.zip or padded past
-      # the cap, and no extension or size check tells a real image from one. That needs git 2.40, which also sets GIT_ATTR_SOURCE: the
+      # gitleaks. That needs git 2.40, which also sets GIT_ATTR_SOURCE: the
       # scan reads the base's .gitattributes (gantry#84).
+      # --text costs time on a PR that adds big binaries (27s for 54MB in the
+      # case behind gantry#104). That is kept on purpose: skipping binary
+      # extensions or capping size would let a key hide in a file named x.zip
+      # or padded past the cap, and no extension or size check tells a real
+      # archive from a fake one.
       # A PR can't loosen the scan for itself (gantry#68, #84): it runs with the
       # base's .gitleaks.toml and .gitleaksignore (the default rules if the base
       # has none), never the PR's, and `gitleaks:allow` comments are ignored. A PR that touches either file, or adds a
