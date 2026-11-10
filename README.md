@@ -181,8 +181,9 @@ jobs:
 ## Generated code is up to date
 
 Set `codegen-command` and the node job runs it after install, then fails if it
-changed or added any file git would commit: the committed generated files are
-stale. The error and the run's summary list each changed file. Without the
+changed, added or deleted any file git would commit: the committed generated
+files are stale. The error annotation says so without naming files; each
+changed file follows in the step log and the run's summary. Without the
 input the step skips and the summary says `Skipped: no codegen-command given`.
 
 ```yaml
