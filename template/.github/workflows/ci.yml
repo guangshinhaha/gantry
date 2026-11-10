@@ -28,3 +28,4 @@ jobs:
     #   runs-on: '["self-hosted","gantry"]'   # once your runner is up
     #   e2e: true
     #   node: false   # if this repo's own workflow runs its tests
+    #   codegen-command: pnpm prisma generate   # fail when committed generated files are stale
