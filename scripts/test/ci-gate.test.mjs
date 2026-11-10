@@ -273,7 +273,9 @@ test("gate, PR: renames don't throw the count off", () => {
 
 // gantry#62: compare lists at most 300 files, so 300 may be a cut-off list.
 const docs = (n) => Array.from({ length: n }, (_, i) => `docs/many/f${i}.md`);
-const push = (compare) => run({ event: "push", compare });
+// gantry#110: a docs-only push needs a green ci-ok at the previous head.
+const greenBefore = { check_runs: [{ name: "gantry / ci-ok", conclusion: "success", app: { slug: "github-actions" } }] };
+const push = (compare, checks = greenBefore) => run({ event: "push", compare, checks });
 test("gate, push: 299 docs files are docs-only", () => assert.equal(push(docs(299)), "false"));
 test("gate, push: 300 docs files may hide code, so node runs", () => assert.equal(push(docs(300)), "true"));
 test("gate, push: code in the list runs node", () => assert.equal(push(["docs/a.md", "src/x.ts"]), "true"));
@@ -284,11 +286,30 @@ test("gate, push: a code file under docs/ runs node", () => assert.equal(push(["
 test("gate, push: a failed compare is not docs-only", () => assert.equal(push("fail"), "true"));
 // gantry#90: after a force-push, compare lists only the commits since the fork,
 // so a code change the old and new tips share is missing from the list.
-const pushStatus = (compareStatus) => runGate({ root: 200, event: "push", compare: ["docs/a.md"], compareStatus }).outputs.run_node;
+const pushStatus = (compareStatus) => runGate({ root: 200, event: "push", compare: ["docs/a.md"], compareStatus, checks: greenBefore }).outputs.run_node;
 test("gate, push: a fast-forward docs push is docs-only", () => assert.equal(pushStatus("ahead"), "false"));
 test("gate, push: a force-push (diverged) of a docs commit runs node", () => assert.equal(pushStatus("diverged"), "true"));
 test("gate, push: a rewind (behind) runs node", () => assert.equal(pushStatus("behind"), "true"));
 test("gate, push: a compare with no status runs node", () => assert.equal(pushStatus(null), "true"));
+// gantry#110: red push, then a docs fast-forward on top. The list shows only the
+// docs file, so the break under it must be caught by BEFORE's ci-ok.
+const redBefore = { check_runs: [{ name: "gantry / ci-ok", conclusion: "failure", app: { slug: "github-actions" } }] };
+test("gate, push: docs on top of a red ci-ok runs node", () => assert.equal(push(["docs/a.md"], redBefore), "true"));
+test("gate, push: docs on top of a head with no ci-ok runs node", () => assert.equal(push(["docs/a.md"], { check_runs: [] }), "true"));
+test("gate, push: docs on top of an unfinished ci-ok runs node", () => {
+  assert.equal(push(["docs/a.md"], { check_runs: [{ name: "gantry / ci-ok", conclusion: null, app: { slug: "github-actions" } }] }), "true");
+});
+test("gate, push: docs when the checks lookup fails runs node", () => assert.equal(push(["docs/a.md"], "fail"), "true"));
+test("gate, push: one red ci-ok among green ones runs node", () => {
+  const mixed = { check_runs: [...greenBefore.check_runs, ...redBefore.check_runs] };
+  assert.equal(push(["docs/a.md"], mixed), "true");
+});
+test("gate, push: a green lookalike from another app does not count", () => {
+  assert.equal(push(["docs/a.md"], { check_runs: [{ name: "gantry / ci-ok", conclusion: "success", app: { slug: "x" } }] }), "true");
+});
+test("gate, PR: docs-only is unaffected by checks (the PR lists everything)", () => {
+  assert.equal(run({ files: ["docs/a.md"], checks: redBefore }), "false");
+});
 test("gate, push: an empty list is not docs-only", () => assert.equal(push([]), "true"));
 
 // A change that removes or renames the root package.json leaves the head with
