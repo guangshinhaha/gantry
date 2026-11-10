@@ -188,9 +188,10 @@ input the step skips and the summary says `Skipped: no codegen-command given`.
       codegen-command: pnpm prisma generate   # or: make generate
 ```
 
-It lives in the node job, so it needs a root `package.json` and `node: true`,
-and a docs-only change skips it with the rest. When the job skips for either of
-the first two reasons, the summary says `codegen-command did not run`.
+It lives in the node job, right after install and before lint and tests, so it
+needs a root `package.json` and `node` left on, and a docs-only change skips it
+with the rest. When the job skips because the repo has no `package.json` or the
+caller set `node: false`, the summary says `codegen-command did not run`.
 The command runs under `bash -eo pipefail`, so the first failing command fails
 the step. The tree is compared with `HEAD`, so a file an install hook already
 regenerated still counts as stale. Gitignored output isn't checked, since it

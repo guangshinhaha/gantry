@@ -33,7 +33,7 @@ function stepScript() {
 const git = (cwd, ...a) => execFileSync("git", a, { cwd, encoding: "utf8" });
 
 // A committed repo holding gen.txt = "v1", plus an optional dirty file before the step.
-function run(codegen, { dirtyBefore, ignore, keepDir } = {}) {
+function run(codegen, { dirtyBefore, ignore } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "codegen-"));
   git(cwd, "init", "-q");
   git(cwd, "config", "user.email", "t@t");
@@ -118,7 +118,8 @@ test("a failing first command in a chain fails the step", () => {
 
 test("a multi-line command can't inject a workflow command", () => {
   const r = run("echo '::add-mask::x'\nexit 3");
-  assert.doesNotMatch(r.out.split("\n").filter((l) => l.startsWith("::error::")).join("\n"), /add-mask/);
+  const commands = r.out.split("\n").filter((l) => l.startsWith("::") && l !== "::add-mask::x");
+  assert.deepEqual(commands, ["::error::codegen-command failed (exit 3)"]);
 });
 
 test("non-ASCII file names are printed as is", () => {
@@ -127,6 +128,6 @@ test("non-ASCII file names are printed as is", () => {
 });
 
 test("the real index is left alone", () => {
-  const r = run("echo x > new-gen.txt", { keepDir: true });
+  const r = run("echo x > new-gen.txt");
   assert.equal(git(r.cwd, "diff", "--cached", "--name-only"), "");
 });

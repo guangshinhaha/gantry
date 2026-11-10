@@ -435,6 +435,49 @@ jobs:
           if [ "${{ steps.pm.outputs.pm }}" = pnpm ]; then pnpm install --frozen-lockfile
           else npm ci; fi
 
+      # Opt-in (gantry#19): runs the caller's codegen-command and fails when
+      # the tree then differs from HEAD, i.e. the committed generated files are
+      # stale. Comparing with HEAD, not with the tree before the command, means
+      # an install hook that already regenerated them can't hide it. Staging
+      # goes into a temporary index so the real one stays untouched for later
+      # steps; that way a file the command adds counts as well as one it edits
+      # or deletes, and gitignored output is left out because it isn't
+      # committed. It runs right after Install, before lint and tests, so
+      # their leftovers (coverage/, caches) aren't blamed on codegen. The command value is never echoed into an annotation, so a
+      # multi-line value can't inject workflow commands.
+      - name: Generated code is up to date
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          CODEGEN: ${{ inputs.codegen-command }}
+        run: |
+          if [ -z "$CODEGEN" ]; then
+            echo "Skipped: no codegen-command given" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          rc=0
+          bash -eo pipefail -c "$CODEGEN" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::codegen-command failed (exit $rc)"
+            exit 1
+          fi
+          # Seeded from the real index so git keeps its stat cache and only
+          # hashes what changed.
+          real_index=$(git rev-parse --git-path index)
+          export GIT_INDEX_FILE
+          GIT_INDEX_FILE=$(mktemp "${RUNNER_TEMP:-/tmp}/codegen-index.XXXXXX")
+          trap 'rm -f "$GIT_INDEX_FILE"' EXIT
+          cp "$real_index" "$GIT_INDEX_FILE"
+          git add -A
+          after=$(git write-tree)
+          if [ "$after" != "$(git rev-parse 'HEAD^{tree}')" ]; then
+            changed=$(git -c core.quotePath=false diff --name-status --no-renames HEAD "$after")
+            echo "::error::Generated code is out of date: codegen-command changed committed files. Run it and commit the result."
+            echo "$changed"
+            { echo "Generated code is out of date. codegen-command changed:"; echo '```'; echo "$changed"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Generated code is up to date."
+
       # Every check below runs even if an earlier one failed, so one push
       # reports all failures (lint error AND failing test), not just the first.
       # The job still fails overall if any step fails. `!cancelled()` alone
@@ -479,44 +522,6 @@ jobs:
           else
             echo "Unit tests skipped: no test script" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-
-      # Opt-in (gantry#19): runs the caller's codegen-command and fails when
-      # the tree then differs from HEAD, i.e. the committed generated files are
-      # stale. Comparing with HEAD, not with the tree before the command, means
-      # an install hook that already regenerated them can't hide it. Staging
-      # goes into a temporary index so the real one stays untouched for later
-      # steps; that way a file the command adds counts as well as one it edits
-      # or deletes, and gitignored output is left out because it isn't
-      # committed. The command value is never echoed into an annotation, so a
-      # multi-line value can't inject workflow commands.
-      - name: Generated code is up to date
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        env:
-          CODEGEN: ${{ inputs.codegen-command }}
-        run: |
-          if [ -z "$CODEGEN" ]; then
-            echo "Skipped: no codegen-command given" | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          rc=0
-          bash -eo pipefail -c "$CODEGEN" || rc=$?
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::codegen-command failed (exit $rc)"
-            exit 1
-          fi
-          export GIT_INDEX_FILE
-          GIT_INDEX_FILE=$(mktemp "${RUNNER_TEMP:-/tmp}/codegen-index.XXXXXX")
-          git read-tree HEAD
-          git add -A
-          after=$(git write-tree)
-          if [ "$after" != "$(git rev-parse 'HEAD^{tree}')" ]; then
-            changed=$(git -c core.quotePath=false diff --name-status --no-renames HEAD "$after")
-            echo "::error::Generated code is out of date: codegen-command changed committed files. Run it and commit the result."
-            echo "$changed"
-            { echo "Generated code is out of date. codegen-command changed:"; echo '```'; echo "$changed"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          echo "Generated code is up to date."
 
       - name: Dependency audit (high+)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
