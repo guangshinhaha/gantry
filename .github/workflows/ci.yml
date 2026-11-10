@@ -69,6 +69,7 @@ jobs:
           SHA: ${{ github.sha }}
           PUSHED_REF: ${{ github.ref }}
           NODE_INPUT: ${{ inputs.node }}
+          HAS_CODEGEN: ${{ inputs.codegen-command != '' }}
         run: |
           merged_pr=false
           docs_only=false
@@ -203,6 +204,8 @@ jobs:
             elif [ -z "$skip_reason" ]; then
               run_node=true
             else
+              # codegen-command runs inside the node job, so say it didn't run.
+              if [ "$HAS_CODEGEN" = true ]; then skip_reason="$skip_reason, so codegen-command did not run"; fi
               echo "Node checks skipped: $skip_reason" >> "$GITHUB_STEP_SUMMARY"
               echo "::notice::Node checks skipped: $skip_reason"
             fi
@@ -478,11 +481,14 @@ jobs:
           fi
 
       # Opt-in (gantry#19): runs the caller's codegen-command and fails when
-      # that changes the tree, i.e. the committed generated files are stale.
-      # The tree is snapshotted as a git tree object before and after (`git add
-      # -A` in this throwaway checkout), so a file the install already touched
-      # isn't blamed on codegen, a file codegen adds counts as well as one it
-      # edits, and gitignored output is left out because it isn't committed.
+      # the tree then differs from HEAD, i.e. the committed generated files are
+      # stale. Comparing with HEAD, not with the tree before the command, means
+      # an install hook that already regenerated them can't hide it. Staging
+      # goes into a temporary index so the real one stays untouched for later
+      # steps; that way a file the command adds counts as well as one it edits
+      # or deletes, and gitignored output is left out because it isn't
+      # committed. The command value is never echoed into an annotation, so a
+      # multi-line value can't inject workflow commands.
       - name: Generated code is up to date
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
@@ -492,19 +498,22 @@ jobs:
             echo "Skipped: no codegen-command given" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          git add -A
-          before=$(git write-tree)
-          if ! bash -c "$CODEGEN"; then
-            echo "::error::codegen-command failed: $CODEGEN"
+          rc=0
+          bash -eo pipefail -c "$CODEGEN" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::codegen-command failed (exit $rc)"
             exit 1
           fi
+          export GIT_INDEX_FILE
+          GIT_INDEX_FILE=$(mktemp "${RUNNER_TEMP:-/tmp}/codegen-index.XXXXXX")
+          git read-tree HEAD
           git add -A
           after=$(git write-tree)
-          if [ "$before" != "$after" ]; then
-            changed=$(git diff --name-status --no-renames "$before" "$after")
-            echo "::error::Generated code is out of date: \`$CODEGEN\` changed files that are committed. Run it and commit the result."
+          if [ "$after" != "$(git rev-parse 'HEAD^{tree}')" ]; then
+            changed=$(git -c core.quotePath=false diff --name-status --no-renames HEAD "$after")
+            echo "::error::Generated code is out of date: codegen-command changed committed files. Run it and commit the result."
             echo "$changed"
-            { echo "Generated code is out of date. \`$CODEGEN\` changed:"; echo '```'; echo "$changed"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            { echo "Generated code is out of date. codegen-command changed:"; echo '```'; echo "$changed"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           echo "Generated code is up to date."

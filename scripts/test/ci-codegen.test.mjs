@@ -33,13 +33,14 @@ function stepScript() {
 const git = (cwd, ...a) => execFileSync("git", a, { cwd, encoding: "utf8" });
 
 // A committed repo holding gen.txt = "v1", plus an optional dirty file before the step.
-function run(codegen, { dirtyBefore } = {}) {
+function run(codegen, { dirtyBefore, ignore, keepDir } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "codegen-"));
   git(cwd, "init", "-q");
   git(cwd, "config", "user.email", "t@t");
   git(cwd, "config", "user.name", "t");
   writeFileSync(join(cwd, "gen.txt"), "v1\n");
   writeFileSync(join(cwd, "other.txt"), "o\n");
+  if (ignore) writeFileSync(join(cwd, ".gitignore"), `${ignore}\n`);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-qm", "base");
   if (dirtyBefore) writeFileSync(join(cwd, dirtyBefore), "install touched me\n");
@@ -50,7 +51,7 @@ function run(codegen, { dirtyBefore } = {}) {
     env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: summary, CODEGEN: codegen },
     encoding: "utf8",
   });
-  return { ...r, summary: readFileSync(summary, "utf8"), out: r.stdout + r.stderr };
+  return { ...r, cwd, summary: readFileSync(summary, "utf8"), out: r.stdout + r.stderr };
 }
 
 test("no command: skips and says why", () => {
@@ -92,13 +93,40 @@ test("the command itself failing fails the step with its own message", () => {
   assert.match(r.out, /codegen-command failed/);
 });
 
-test("a file already dirty before the command is not blamed on it", () => {
-  const r = run("echo v1 > gen.txt", { dirtyBefore: "other.txt" });
+test("a file the install already regenerated is still stale against HEAD", () => {
+  const r = run("true", { dirtyBefore: "gen.txt" });
+  assert.notEqual(r.status, 0);
+  assert.match(r.out, /gen\.txt/);
+});
+
+test("a deleted generated file is caught", () => {
+  const r = run("rm gen.txt");
+  assert.notEqual(r.status, 0);
+  assert.match(r.out, /D\s+gen\.txt/);
+});
+
+test("gitignored output is not counted", () => {
+  const r = run("echo build > ignored.out", { ignore: "ignored.out" });
   assert.equal(r.status, 0, r.out);
 });
 
-test("a file the command changes after it was already dirty is still caught", () => {
-  const r = run("echo changed-by-codegen > other.txt", { dirtyBefore: "other.txt" });
+test("a failing first command in a chain fails the step", () => {
+  const r = run("false; echo v1 > gen.txt");
   assert.notEqual(r.status, 0);
-  assert.match(r.out, /other\.txt/);
+  assert.match(r.out, /codegen-command failed/);
+});
+
+test("a multi-line command can't inject a workflow command", () => {
+  const r = run("echo '::add-mask::x'\nexit 3");
+  assert.doesNotMatch(r.out.split("\n").filter((l) => l.startsWith("::error::")).join("\n"), /add-mask/);
+});
+
+test("non-ASCII file names are printed as is", () => {
+  const r = run("echo x > é.json");
+  assert.match(r.out, /é\.json/);
+});
+
+test("the real index is left alone", () => {
+  const r = run("echo x > new-gen.txt", { keepDir: true });
+  assert.equal(git(r.cwd, "diff", "--cached", "--name-only"), "");
 });

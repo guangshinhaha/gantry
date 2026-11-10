@@ -67,7 +67,7 @@ esac
 // push path's compare API lists ("fail" = the call errors); compareStatus: its
 // `status` ("ahead" = BEFORE is an ancestor of SHA, "diverged" = a force-push).
 function runGate({
-  root, tree = [], truncated = false, treeFails = false, treeBody = "", gitPaths = null, node = "true",
+  root, tree = [], truncated = false, treeFails = false, treeBody = "", gitPaths = null, node = "true", codegen = "false",
   files = ["src/x.ts"], changed = files.length, event = "pull_request", compare = [], compareStatus = "ahead", merged = [],
   ref = "refs/heads/main", checks = { check_runs: [] },
 }) {
@@ -94,7 +94,7 @@ function runGate({
         STUB_FILES: JSON.stringify(files.map(entry)), STUB_PR: JSON.stringify({ changed_files: changed }),
         STUB_COMPARE: compare === "fail" ? "fail" : JSON.stringify({ status: compareStatus, files: compare.map(entry) }), STUB_MERGED: merged === "fail" ? "fail" : JSON.stringify(merged),
         PUSHED_REF: ref, STUB_CHECKS: checks === "fail" ? "fail" : JSON.stringify(checks),
-        NODE_INPUT: node, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
+        NODE_INPUT: node, HAS_CODEGEN: codegen, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
         LANG: "C.UTF-8", RUNNER_TEMP: dir, GITHUB_SERVER_URL: "https://github.com", GH_TOKEN: "t",
       },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
@@ -389,4 +389,13 @@ test("gantry#64: a green lookalike ci-ok can't outvote a red one", () => {
     { name: "deploy / ci-ok", conclusion: "success", app: { slug: "github-actions" } },
   ] };
   assert.equal(pushRun({ merged: [prInto("main")], checks }).outputs.merged_pr, "false");
+});
+
+test("a skipped node job says codegen-command did not run, only when one is set", () => {
+  const set = runGate({ root: 404, tree: ["README.md"], codegen: "true" });
+  assert.match(set.summary, /Node checks skipped: no package\.json in this repo, so codegen-command did not run/);
+  const off = runGate({ root: 200, node: "false", codegen: "true" });
+  assert.match(off.summary, /the caller set node: false, so codegen-command did not run/);
+  const unset = runGate({ root: 404, tree: ["README.md"] });
+  assert.doesNotMatch(unset.summary, /codegen/);
 });
