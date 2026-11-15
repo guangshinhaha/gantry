@@ -15,7 +15,10 @@
 #
 # <remote>'s default branch is refs/remotes/<remote>/HEAD and what
 # `git ls-remote --symref <remote> HEAD` names; both are guarded. If ls-remote
-# fails or names none, the gate fails closed, even with the local ref set.
+# fails or names none, the gate fails closed, even with the local ref set. The
+# push goes to `git remote get-url --push --all <remote>` (remote.<remote>.pushurl
+# when set); each push URL other than the fetch URL is asked the same way, its
+# default is guarded too, and the gate fails closed if it names none.
 # --base: the branch's base, default <remote>'s default branch (as ls-remote
 # names it, else the local ref), else <remote>/main or <remote>/master. Commits
 # are those on HEAD's first-parent line and not on the base.
@@ -83,6 +86,23 @@ REMOTE_DEFAULT=$(git ls-remote --symref "$REMOTE" HEAD 2>/dev/null |
 # The remote must answer: a local ref alone may be stale, so it's never enough.
 [ -n "$REMOTE_DEFAULT" ] ||
   fail "can't determine $REMOTE's default branch: \`git ls-remote --symref $REMOTE HEAD\` failed or named none, so the gate can't tell whether $BRANCH is it (refs/remotes/$REMOTE/HEAD alone may be stale)"
+# The push goes to <remote>'s push URLs (remote.<remote>.pushurl, else every
+# url), which may be another repo with another default branch. Ask each one that
+# differs from the fetch URL for its default, and never push to that either.
+# <remote> given as a URL rather than a name is its own push URL.
+FETCH_URL=$(git remote get-url "$REMOTE" 2>/dev/null) || FETCH_URL=$REMOTE
+PUSH_URLS=$(git remote get-url --push --all "$REMOTE" 2>/dev/null) || PUSH_URLS=$REMOTE
+set -f; IFS=$NL
+for u in $PUSH_URLS; do
+  [ "$u" = "$FETCH_URL" ] && continue
+  d=$(git ls-remote --symref "$u" HEAD 2>/dev/null |
+    awk '$1 == "ref:" && $3 == "HEAD" { sub(/^refs\/heads\//, "", $2); print $2; exit }') || d=""
+  [ -n "$d" ] ||
+    fail "can't determine the default branch of $REMOTE's push URL $u: \`git ls-remote --symref $u HEAD\` failed or named none, so the gate can't tell whether pushing $BRANCH there pushes its default"
+  [ "$BRANCH" = "$d" ] &&
+    fail "on $BRANCH, a default or base branch (the default of $REMOTE's push URL $u); the gate pushes work branches only"
+done
+set +f; unset IFS
 if [ -z "$BASE" ]; then
   for b in "$REMOTE_DEFAULT" "$LOCAL_DEFAULT" main master; do
     [ -n "$b" ] && git rev-parse -q --verify "refs/remotes/$REMOTE/$b" >/dev/null && { BASE=$REMOTE/$b; break; }
