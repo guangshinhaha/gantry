@@ -53,7 +53,7 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   Every check runs even if an earlier one fails, so one push shows all failures. A failed install still stops the job.
   The push hook and CI run the same script, `bin/gantry-check <name>`, so a check is defined once and the two can't drift (gantry#125).
   The hook runs lefthook's copy of gantry at `ref: main`. CI downloads the script at the `gantry-ref` input (default `main`).
-  If you pin `ci.yml` to a sha, set `gantry-ref` to the same sha.
+  If you pin `ci.yml` to a sha, set `gantry-ref` to the same sha, and pin `ci-retarget.yml` and its `gantry-ref` to it too: a `ci.yml` from before gantry#134 has no live-base check, so a re-run of it tests the old base.
 - **Mutation testing** on the files the PR changed (see below). Survivors are
   posted as a PR comment.
 - **`needs-human` label** when the PR touches a risky path (auth, migrations,
@@ -79,21 +79,44 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   `checks: read`, or the skip never fires and every push runs the checks. The
   previous-head `ci-ok` read for this skip and for the docs-only push skip
   (gantry#110) needs `checks: read` on a private repo too.
-- **A retargeted PR re-runs `ci`.** The template caller listens for `edited`,
-  the only event GitHub sends when a PR's base changes. An edit that leaves the
-  base alone (title, body) skips the caller's job and can't cancel a run in
-  flight. The caller's trigger is:
+- **A retargeted PR re-runs `ci` against its new base; a title or body edit
+  runs nothing** (gantry#65, gantry#134). GitHub sends `edited` for a base
+  change and for a title or body edit alike. If the ci caller listened for it,
+  every edit would add a skipped `ci` run, which becomes the latest for the head
+  and resets the required `gantry / ci-ok` to "expected", so a green PR can't
+  merge. So the ci caller doesn't listen for `edited`:
 
   ```yaml
   on:
     push:
       branches: [main]
     pull_request:
-      types: [opened, synchronize, reopened, edited, ready_for_review]
+      types: [opened, synchronize, reopened, ready_for_review]
   ```
 
-  A caller copied before this has no `edited`: add the `types:` line, the
-  `if:` and the `group:` suffix from `template/.github/workflows/ci.yml`.
+  and `template/.github/workflows/ci-retarget.yml` does. On a base change it
+  re-runs the head's latest `ci` run (cancelling it first if it is still going),
+  so `gantry / ci-ok` blocks the merge until the new run finishes. The block
+  starts when the re-run does, which took 7 to 14 seconds after the retarget in
+  gantry-sandbox; a merge in that gap still lands on the old green. A re-run
+  replays the old event, so ci's gate checks the PR's live base: when it
+  differs, the secret scan and node job merge the head into the new base and
+  test that. They don't use GitHub's merge commit, which stayed on the old base
+  for minutes after a retarget in gantry-sandbox. The gate's file list is read live,
+  so a docs-only PR whose new base brings code runs node. A skipped
+  `ci-retarget` run (any other edit) leaves ci's checks alone. The result stays
+  in `ci`'s run: a check kept in `ci-retarget` would be reset by the next
+  title edit. `ci-retarget` needs `actions: write`. A fork PR's token can't
+  re-run, so re-run its ci by hand after a retarget (`gh run rerun <id>`); a
+  re-run by hand also tests the new base.
+
+  **Upgrading a caller copied before this:** add `ci-retarget.yml` (re-run
+  `gantry-init`, which flags a ci caller that still has `edited`), and in
+  `ci.yml` remove `edited` from `types:`, the `|| github.event.changes.base`
+  part of the job's `if:`, and the `-edit-` suffix of `group:`. Until then, a
+  title or body edit on a green PR blocks its merge. A repo's own workflow with
+  a required check that listens for `edited` (factory's `check`) has the same
+  problem: drop `edited` there too.
 - **Draft PRs run nothing** (gantry#125). Agents push often, and the pre-push
   hook already runs the same checks. The template caller skips its job while the
   PR is a draft and runs once on `ready_for_review`. A draft's required
@@ -692,6 +715,7 @@ and no others, with the repo's local binary. It adds:
 |---|---|
 | `lefthook.yml` | Local hooks. Points at this repo, so updates arrive automatically (re-fetched daily). |
 | `.github/workflows/ci.yml` | A few lines that call gantry's shared CI. |
+| `.github/workflows/ci-retarget.yml` | Re-runs ci when a PR's base changes (gantry#134). A kept `ci.yml` that still listens for `edited` gets a warning. |
 | `.github/workflows/secrets-scan.yml` | A few lines that call gantry's daily secret scan of every branch. |
 | `.github/workflows/mutation.yml` | A few lines that call gantry's mutation testing. |
 | `.github/workflows/preview.yml` | A few lines that call gantry's preview smoke tests. |
@@ -718,6 +742,7 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
                 secrets only; no package.json or `node: false` skips node,
                 a package.json only in a subfolder fails it),
                 secrets, node, then ci-ok (the one required check)
+  ci-retarget.yml  shared re-run of a PR's ci when its base changes (scripts/ci-retarget.mjs)
   secrets-scan.yml  shared daily scan of every branch and all history; opens
                 an issue on a leak, never blocks a PR
   mutation.yml  shared mutation testing that repos call

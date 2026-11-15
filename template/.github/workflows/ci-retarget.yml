@@ -1,0 +1,23 @@
+name: ci-retarget
+# A PR's base change re-runs ci against the new base, so a docs-only green from
+# the old base can't stand (gantry#65). `edited` lives here, not in ci.yml: a
+# title or body edit also sends `edited`, and a skipped run in ci would become
+# ci's latest run for the head and reset the required `gantry / ci-ok`
+# (gantry#134). A skipped run of this workflow leaves ci's checks alone.
+# actions: write is for the re-run. A fork PR's token can't re-run, so re-run
+# its ci by hand after a retarget (`gh run rerun <id>`).
+on:
+  pull_request:
+    types: [edited]
+
+jobs:
+  retarget:
+    if: ${{ github.event.changes.base && !github.event.pull_request.draft }}
+    uses: guangshinhaha/gantry/.github/workflows/ci-retarget.yml@main
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    # gantry:optional
+    # with:
+    #   ci-workflow: .github/workflows/ci.yml   # if your ci caller has another name

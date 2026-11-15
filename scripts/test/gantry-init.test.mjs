@@ -37,6 +37,22 @@ test("the PR template has Closes and How I verified", () =>
     assert.match(template, /^## How I verified/m);
   }));
 
+test("gantry#134: init adds ci-retarget, and a kept ci caller that listens for edited is flagged", () =>
+  withRepo((dir) => {
+    const old = "on:\n  pull_request:\n    types: [opened, synchronize, reopened, edited, ready_for_review]\n";
+    put(dir, ".github/workflows/ci.yml", old);
+    const out = init(dir);
+    assert.match(out, /add\s+\.github\/workflows\/ci-retarget\.yml/);
+    assert.match(read(dir, ".github/workflows/ci-retarget.yml"), /types: \[edited\]/);
+    assert.equal(read(dir, ".github/workflows/ci.yml"), old, "an existing caller is never overwritten");
+    assert.match(out, /! \.github\/workflows\/ci\.yml listens for edited/);
+  }));
+
+test("gantry#134: a fresh ci caller isn't flagged for edited", () =>
+  withRepo((dir) => {
+    assert.doesNotMatch(init(dir), /listens for edited/);
+  }));
+
 test("a leftover ac-check caller is kept and flagged for deletion", () =>
   withRepo((dir) => {
     put(dir, AC_CALLER, "# old\n");

@@ -59,6 +59,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
+      merge_into: ${{ steps.check.outputs.merge_into }}
       merged_pr: ${{ steps.check.outputs.merged_pr }}
       run_node: ${{ steps.check.outputs.run_node }}
       node_error: ${{ steps.check.outputs.node_error }}
@@ -69,6 +70,8 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
           PUSHED_REF: ${{ github.ref }}
@@ -85,6 +88,31 @@ jobs:
               --jq '[.check_runs[] | select(.app.slug == "github-actions" and (.name | test("(^| / )ci-ok$")))] | if length > 0 and all(.[]; .conclusion == "success") then 1 else 0 end' 2>/dev/null) || g=0
             [ "${g:-0}" -gt 0 ]
           }
+          # A re-run replays the event that started the run, base included, and
+          # github.sha stays the merge commit with that base. ci-retarget.yml
+          # re-runs ci when a PR's base changes (gantry#134), so when the PR's
+          # base is no longer the event's, the secrets and node jobs merge the
+          # head into the current base and test that. GitHub's own merge commit
+          # can't be used: it can stay on the old base for minutes after a
+          # retarget. The file list below is read live, so it is already
+          # against the current base.
+          merge_into=""
+          # Where to look for package.json below: github.sha, or on such a
+          # re-run the new base and the head, since a merge has a root
+          # package.json only if one of them does.
+          pkg_refs=$SHA
+          if [ "$EVENT" = pull_request ]; then
+            pull=$(gh api "repos/$REPO/pulls/$PR") || { echo "::error::could not read PR #$PR"; exit 1; }
+            live_base=$(printf '%s' "$pull" | jq -r .base.ref)
+            if [ "$live_base" != "$BASE_REF" ]; then
+              if [ "$(printf '%s' "$pull" | jq -r .head.sha)" != "$PR_HEAD" ]; then
+                echo "::error::PR #$PR has moved on from ${PR_HEAD:0:7}, so this run's result can't stand for it. The run for its new head covers it."; exit 1
+              fi
+              merge_into=$live_base
+              pkg_refs="$(printf '%s' "$pull" | jq -r .base.sha) $PR_HEAD"
+              echo "The PR's base is now $live_base, not $BASE_REF as when this run started, so the checks run on ${PR_HEAD:0:7} merged into $live_base."
+            fi
+          fi
           if [ "$EVENT" = push ]; then
             # Skip only on proof the checks already passed: a PR that merged
             # into this very branch (gantry#63) and whose head had a green
@@ -121,7 +149,7 @@ jobs:
             if [ "$EVENT" = pull_request ]; then
               entries=$(gh api --paginate "repos/$REPO/pulls/$PR/files" \
                 --jq '.[] | {f: .filename, p: .previous_filename} | @json')
-              changed=$(gh api "repos/$REPO/pulls/$PR" --jq .changed_files)
+              changed=$(printf '%s' "$pull" | jq -r .changed_files)
               listed=$(printf '%s\n' "$entries" | grep -c . || true)
               # The files API stops at 3000, so a shorter list than the PR's
               # changed_files hides the rest (gantry#61).
@@ -171,46 +199,61 @@ jobs:
               fi
             fi
           fi
+          # True if any of the refs has a root package.json. Only a missing file
+          # counts as none. Any other error, such as an API outage, fails this
+          # job so ci-ok can't go green without the checks.
+          root_pkg() {
+            local ref err
+            for ref in $1; do
+              if err=$(gh api "repos/$REPO/contents/package.json?ref=$ref" --silent 2>&1); then return 0; fi
+              case "$err" in
+                *"Not Found (HTTP 404)"*) ;;
+                *) echo "::error::could not check for package.json: $err"; exit 1 ;;
+              esac
+            done
+            return 1
+          }
           run_node=false
           if [ "$merged_pr" = false ] && [ "$docs_only" = false ]; then
             skip_reason=""
             node_error=""
             if [ "$NODE_INPUT" != true ]; then
               skip_reason="the caller set node: false"
-            elif ! err=$(gh api "repos/$REPO/contents/package.json?ref=$SHA" --silent 2>&1); then
-              # Only a missing file skips. Any other error, such as an API outage,
-              # fails this job so ci-ok can't go green without the checks.
-              case "$err" in
-                *"Not Found (HTTP 404)"*) skip_reason="no package.json in this repo" ;;
-                *) echo "::error::could not check for package.json: $err"; exit 1 ;;
-              esac
+            elif ! root_pkg "$pkg_refs"; then
+              skip_reason="no package.json in this repo"
               # No root package.json. A nested one means a Node project the job
               # can't run, so fail node instead of skipping it (gantry#66).
               # Also checks the body is a tree: the step has no pipefail, so a
               # jq error below would otherwise read as "no package.json".
-              if ! tree=$(gh api "repos/$REPO/git/trees/$SHA?recursive=1") \
-                || ! printf '%s' "$tree" | jq -e '.tree | type == "array"' >/dev/null 2>&1; then
-                echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
-              fi
-              if [ "$(printf '%s' "$tree" | jq -r .truncated)" = true ]; then
-                # Too many files for the API. A shallow fetch without file
-                # contents lists every path in a few seconds.
-                dir="$RUNNER_TEMP/gantry-tree"
-                if ! { git init -q "$dir" \
-                  && git -C "$dir" fetch -q --depth 1 --filter=blob:none \
-                    "https://x-access-token:$GH_TOKEN@${GITHUB_SERVER_URL#https://}/$REPO" "$SHA" \
-                  && git -C "$dir" ls-tree -r --name-only FETCH_HEAD > "$dir.paths"; }; then
+              # Every ref in pkg_refs: on a retarget re-run that is the new base
+              # and the head, and either can bring a nested package.json.
+              found=""
+              for tree_ref in $pkg_refs; do
+                if ! tree=$(gh api "repos/$REPO/git/trees/$tree_ref?recursive=1") \
+                  || ! printf '%s' "$tree" | jq -e '.tree | type == "array"' >/dev/null 2>&1; then
                   echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
                 fi
-                # git quotes and escapes any name with a quote, newline or
-                # non-ASCII byte, so each line is one ASCII name and a newline
-                # can't fake a match. LC_ALL=C -a: never "binary file matches".
-                found=$(LC_ALL=C grep -a -E '(^"?|/)package\.json"?$' "$dir.paths" || true)
-              else
-                found=$(printf '%s' "$tree" \
-                  | jq -r '.tree[] | select(.type == "blob") | .path | select(. == "package.json" or endswith("/package.json"))')
-              fi
-              nested=$(printf '%s\n' "$found" | head -n 5 | paste -sd ' ' -)
+                if [ "$(printf '%s' "$tree" | jq -r .truncated)" = true ]; then
+                  # Too many files for the API. A shallow fetch without file
+                  # contents lists every path in a few seconds.
+                  dir="$RUNNER_TEMP/gantry-tree-$tree_ref"
+                  if ! { git init -q "$dir" \
+                    && git -C "$dir" fetch -q --depth 1 --filter=blob:none \
+                      "https://x-access-token:$GH_TOKEN@${GITHUB_SERVER_URL#https://}/$REPO" "$tree_ref" \
+                    && git -C "$dir" ls-tree -r --name-only FETCH_HEAD > "$dir.paths"; }; then
+                    echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
+                  fi
+                  # git quotes and escapes any name with a quote, newline or
+                  # non-ASCII byte, so each line is one ASCII name and a newline
+                  # can't fake a match. LC_ALL=C -a: never "binary file matches".
+                  ref_found=$(LC_ALL=C grep -a -E '(^"?|/)package\.json"?$' "$dir.paths" || true)
+                else
+                  ref_found=$(printf '%s' "$tree" \
+                    | jq -r '.tree[] | select(.type == "blob") | .path | select(. == "package.json" or endswith("/package.json"))')
+                fi
+                found=$(printf '%s\n%s' "$found" "$ref_found")
+              done
+              nested=$(printf '%s\n' "$found" | awk 'NF && !seen[$0]++' | head -n 5 | paste -sd ' ' -)
               # Asks jq, not the flattened list, so a name with a newline in it
               # can't fake a line.
               if [ -n "$(printf '%s\n' "$entries" | jq -r 'select(.f == "package.json" or .p == "package.json") | "y"')" ]; then
@@ -234,6 +277,7 @@ jobs:
               echo "::notice::Node checks skipped: $skip_reason"
             fi
           fi
+          echo "merge_into=$merge_into" >> "$GITHUB_OUTPUT"
           echo "merged_pr=$merged_pr" >> "$GITHUB_OUTPUT"
           echo "run_node=$run_node" >> "$GITHUB_OUTPUT"
           echo "node_error=${node_error:-}" >> "$GITHUB_OUTPUT"
@@ -248,6 +292,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # A re-run after a PR's base changed (gantry#134; the gate sets
+      # merge_into): merge the head into the new base, base first as GitHub
+      # does, so HEAD^1 is the base and HEAD^2 the head. The head is already
+      # here: it is the second parent of github.sha, the old merge commit.
+      - name: Merge into the new base
+        if: ${{ needs.gate.outputs.merge_into != '' }}
+        env:
+          BASE: ${{ needs.gate.outputs.merge_into }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then git fetch -q --no-tags --unshallow origin; fi
+          git fetch -q --no-tags origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+          git cat-file -e "$PR_HEAD^{commit}" || { echo "::error::the PR head ${PR_HEAD:0:7} isn't in this checkout"; exit 1; }
+          git checkout -q --detach "refs/remotes/origin/$BASE"
+          if ! git -c user.name=gantry -c user.email=gantry@users.noreply.github.com merge -q --no-ff --no-edit "$PR_HEAD"; then
+            echo "::error::${PR_HEAD:0:7} conflicts with its new base $BASE, so it can't be tested against it. Resolve the conflict and push."
+            exit 1
+          fi
+          echo "Testing $(git rev-parse --short HEAD), ${PR_HEAD:0:7} merged into $BASE at $(git rev-parse --short 'HEAD^1')."
       # Downloads the gitleaks build for this runner's OS and arch and checks it
       # against a pinned sha256 (gantry#67). A gitleaks already on PATH is used
       # instead, and the log says so: a self-hosted runner may install its own,
@@ -437,7 +500,29 @@ jobs:
           echo "::error::$NODE_ERROR"
           exit 1
 
+      # Full history only when the step below has to merge.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ needs.gate.outputs.merge_into != '' && '0' || '1' }}
+      # A re-run after a PR's base changed (gantry#134; the gate sets
+      # merge_into): merge the head into the new base, base first as GitHub
+      # does, so HEAD^1 is the base and HEAD^2 the head. The head is already
+      # here: it is the second parent of github.sha, the old merge commit.
+      - name: Merge into the new base
+        if: ${{ needs.gate.outputs.merge_into != '' }}
+        env:
+          BASE: ${{ needs.gate.outputs.merge_into }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then git fetch -q --no-tags --unshallow origin; fi
+          git fetch -q --no-tags origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+          git cat-file -e "$PR_HEAD^{commit}" || { echo "::error::the PR head ${PR_HEAD:0:7} isn't in this checkout"; exit 1; }
+          git checkout -q --detach "refs/remotes/origin/$BASE"
+          if ! git -c user.name=gantry -c user.email=gantry@users.noreply.github.com merge -q --no-ff --no-edit "$PR_HEAD"; then
+            echo "::error::${PR_HEAD:0:7} conflicts with its new base $BASE, so it can't be tested against it. Resolve the conflict and push."
+            exit 1
+          fi
+          echo "Testing $(git rev-parse --short HEAD), ${PR_HEAD:0:7} merged into $BASE at $(git rev-parse --short 'HEAD^1')."
 
       # The checks below are bin/gantry-check, the script the pre-push hook in
       # hooks/node.yml also runs, so each has one definition (gantry#125).
