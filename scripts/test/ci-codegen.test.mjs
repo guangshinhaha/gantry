@@ -74,6 +74,17 @@ test("stale tracked file: fails and names it", () => {
   assert.match(r.summary, /gen\.txt/);
 });
 
+// Racy git: "v2" has v1's size, and a codegen fast enough to write it in the
+// same second as the commit leaves gen.txt's stat matching the index entry.
+// git rehashes such an entry only while the index file is no older than it, so
+// the copied index must keep the real one's mtime. The sleep puts the copy in
+// a later second, as a slow runner did (the one-off flake in gantry#140).
+test("a same-size rewrite in the commit's second is still caught (racy git)", () => {
+  const r = run("echo v2 > gen.txt; sleep 1.2");
+  assert.notEqual(r.status, 0, r.out);
+  assert.match(r.out, /gen\.txt/);
+});
+
 test("new untracked generated file: fails and names it", () => {
   const r = run("echo x > new-gen.txt");
   assert.notEqual(r.status, 0);
