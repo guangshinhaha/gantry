@@ -1,7 +1,10 @@
 # gantry/node — JS/TS projects. Each check skips itself if the repo
 # lacks the script/config, so it is safe to include everywhere.
 #
-# Package manager is picked from the lockfile (pnpm > npm).
+# The pre-push checks run bin/gantry-check from lefthook's copy of this remote,
+# the same script CI's node job runs, so the hook and CI can't drift apart
+# (gantry#125). lefthook clones the remote to info/lefthook-remotes/gantry-<ref>
+# under the git dir; template/lefthook.yml uses ref main.
 
 pre-commit:
   commands:
@@ -15,25 +18,16 @@ pre-push:
   commands:
     gantry-format:
       priority: 0
-      run: |
-        pm=npm; [ -f pnpm-lock.yaml ] && pm=pnpm
-        $pm run --if-present format:check
+      run: sh "$(git rev-parse --git-path info/lefthook-remotes)/gantry-main/bin/gantry-check" format
 
     gantry-typecheck:
       priority: 1
-      run: |
-        [ -f tsconfig.json ] || exit 0
-        node_modules/.bin/tsc --noEmit
+      run: sh "$(git rev-parse --git-path info/lefthook-remotes)/gantry-main/bin/gantry-check" typecheck
 
     gantry-test:
       priority: 2
-      run: |
-        pm=npm; [ -f pnpm-lock.yaml ] && pm=pnpm
-        $pm run --if-present test
+      run: sh "$(git rev-parse --git-path info/lefthook-remotes)/gantry-main/bin/gantry-check" test
 
     gantry-audit:
       priority: 3
-      run: |
-        if [ -f pnpm-lock.yaml ]; then pnpm audit --audit-level high --prod
-        elif [ -f package-lock.json ]; then npm audit --audit-level=high --omit=dev
-        fi
+      run: sh "$(git rev-parse --git-path info/lefthook-remotes)/gantry-main/bin/gantry-check" audit
