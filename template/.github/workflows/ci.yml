@@ -5,11 +5,14 @@ name: ci
 # green from the old base must not stand (gantry#65). An edit that leaves the base
 # alone (title, body) skips the job, so no new `ci-ok` turns a red head green, and
 # its own concurrency group keeps it from cancelling the PR's real run.
+# A draft PR runs nothing: agents iterate through the pre-push hook, and CI
+# proves the result once, on `ready_for_review` (gantry#125). Until then the
+# required `gantry / ci-ok` waits, so a draft can't be merged on an old green.
 on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
 
 # A new push to a PR cancels its run still in flight. Main is never cancelled.
 concurrency:
@@ -18,7 +21,7 @@ concurrency:
 
 jobs:
   gantry:
-    if: ${{ github.event.action != 'edited' || github.event.changes.base }}
+    if: ${{ !github.event.pull_request.draft && (github.event.action != 'edited' || github.event.changes.base) }}
     uses: guangshinhaha/gantry/.github/workflows/ci.yml@main
     permissions:
       contents: read
