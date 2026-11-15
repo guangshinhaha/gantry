@@ -533,7 +533,14 @@ gantry-gate-evidence [--bug] [--base <ref>] [--remote <name>] [--force-with-leas
   `<remote>/master`). The remote's default is `refs/remotes/<remote>/HEAD` and
   what `git ls-remote --symref <remote> HEAD` names, so an unset or stale
   `<remote>/HEAD` doesn't hide it; if ls-remote fails or names none, the gate
-  fails, even with `<remote>/HEAD` set.
+  fails, even with `<remote>/HEAD` set. The push goes to the remote's push
+  URLs (`git remote get-url --push --all <remote>`, so `remote.<name>.pushurl`
+  when set), which may be another repo: each one that differs from the fetch
+  URL is asked the same way, its default is never pushed to either, and the
+  gate fails if it names none, or if ls-remote would rewrite it again (chained
+  `url.<base>.insteadOf` rules) and so ask another repo than the push lands in.
+  `--remote` must name a configured remote; a URL fails, since a push to a URL
+  applies `pushInsteadOf` rules the gate can't check.
   A merge counts as everything it brings in over its first parent, so merging
   the default branch in before the test commit fails `--bug`: rebase instead.
 - It fails without pushing on: a detached `HEAD`; a branch named `main`,
@@ -546,6 +553,10 @@ gantry-gate-evidence [--bug] [--base <ref>] [--remote <name>] [--force-with-leas
   remote default branch; no commits ahead of the base; or no executable
   pre-push hook file (a push would run no checks; run `lefthook install`).
   `core.hooksPath` from the repo's config is respected.
+- Tool caches that write their own self-ignoring `.gitignore` (`.pytest_cache`,
+  `.venv`, `.ruff_cache`, `.mypy_cache`, ...) fail the gate as untracked
+  `.gitignore` files, unless the repo's committed `.gitignore` lists them. Add
+  them there, not to `.git/info/exclude` or a global excludes file.
 - `--force-with-lease`: for a branch rebased since its last push. Without it a
   rewritten branch's push is refused, and so is the gate.
 - Prints `PASS: pushed <branch> at <sha> to <remote>; ...` or `FAIL: <reason>`,

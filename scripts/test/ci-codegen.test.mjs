@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +33,8 @@ function stepScript() {
 const git = (cwd, ...a) => execFileSync("git", a, { cwd, encoding: "utf8" });
 
 // A committed repo holding gen.txt = "v1", plus an optional dirty file before the step.
-function run(codegen, { dirtyBefore, ignore } = {}) {
+// racy: gen.txt's index entry and the index file share this mtime (see the racy test).
+function run(codegen, { dirtyBefore, ignore, racy } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "codegen-"));
   git(cwd, "init", "-q");
   git(cwd, "config", "user.email", "t@t");
@@ -41,8 +42,13 @@ function run(codegen, { dirtyBefore, ignore } = {}) {
   writeFileSync(join(cwd, "gen.txt"), "v1\n");
   writeFileSync(join(cwd, "other.txt"), "o\n");
   if (ignore) writeFileSync(join(cwd, ".gitignore"), `${ignore}\n`);
+  if (racy) {
+    git(cwd, "config", "core.trustctime", "false");
+    utimesSync(join(cwd, "gen.txt"), racy, racy);
+  }
   git(cwd, "add", "-A");
   git(cwd, "commit", "-qm", "base");
+  if (racy) utimesSync(join(git(cwd, "rev-parse", "--absolute-git-dir").trim(), "index"), racy, racy);
   if (dirtyBefore) writeFileSync(join(cwd, dirtyBefore), "install touched me\n");
   const summary = join(cwd, "..", `summary-${Date.now()}-${Math.random()}`);
   writeFileSync(summary, "");
@@ -72,6 +78,22 @@ test("stale tracked file: fails and names it", () => {
   assert.match(r.out, /gen\.txt/);
   assert.doesNotMatch(r.out, /other\.txt/);
   assert.match(r.summary, /gen\.txt/);
+});
+
+// Racy git (the one-off flake in gantry#140): "v2" has v1's size, so a rewrite
+// that keeps gen.txt's mtime leaves its stat matching the index entry, as a fast
+// codegen in the commit's second does. git rehashes such an entry only while the
+// index file is no older than it, so the copied index must keep the real one's
+// mtime. Both mtimes are pinned to one past second and ctime is ignored, so a
+// copy with a fresh mtime misses the rewrite every time.
+test("a same-size rewrite with an unchanged mtime is still caught (racy git)", () => {
+  const racy = 1700000000;
+  const ref = join(mkdtempSync(join(tmpdir(), "codegen-ref-")), "stamp");
+  writeFileSync(ref, "");
+  utimesSync(ref, racy, racy);
+  const r = run(`echo v2 > gen.txt && touch -r '${ref}' gen.txt`, { racy });
+  assert.notEqual(r.status, 0, r.out);
+  assert.match(r.out, /gen\.txt/);
 });
 
 test("new untracked generated file: fails and names it", () => {

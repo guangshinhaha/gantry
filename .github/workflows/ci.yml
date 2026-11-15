@@ -492,12 +492,15 @@ jobs:
             exit 1
           fi
           # Seeded from the real index so git keeps its stat cache and only
-          # hashes what changed.
+          # hashes what changed. cp -p keeps the index's mtime: git rehashes an
+          # entry whose stat looks clean only while the index is no older than
+          # it (racy git), so a fresh mtime would hide a same-size rewrite made
+          # in the second the file was checked out.
           real_index=$(git rev-parse --git-path index)
           export GIT_INDEX_FILE
           GIT_INDEX_FILE=$(mktemp "${RUNNER_TEMP:-/tmp}/codegen-index.XXXXXX")
           trap 'rm -f "$GIT_INDEX_FILE"' EXIT
-          cp "$real_index" "$GIT_INDEX_FILE"
+          cp -p "$real_index" "$GIT_INDEX_FILE"
           git add -A
           after=$(git write-tree)
           if [ "$after" != "$(git rev-parse 'HEAD^{tree}')" ]; then

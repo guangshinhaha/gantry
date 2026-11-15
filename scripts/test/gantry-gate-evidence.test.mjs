@@ -404,6 +404,95 @@ test("fails closed when ls-remote names no default, even with a stale <remote>/H
     assert.equal(git(origin, "rev-parse", "refs/heads/develop"), before, "develop was pushed");
   }));
 
+// A second bare repo as remote.origin.pushurl: the push goes there, not to the
+// fetch URL. Its default is `develop`; origin's stays main.
+function withPushUrl(fn, { pushDefault = "develop" } = {}) {
+  withRepo((ctx) => {
+    const { root, work } = ctx;
+    const pushRepo = join(root, "push.git");
+    git(root, "init", "-q", "--bare", "-b", "main", pushRepo);
+    git(work, "push", "-q", pushRepo, "main:main", "main:develop");
+    git(pushRepo, "symbolic-ref", "HEAD", `refs/heads/${pushDefault}`);
+    git(work, "config", "remote.origin.pushurl", pushRepo);
+    const pushSha = (b) => {
+      const r = spawnSync("git", ["rev-parse", "-q", "--verify", `refs/heads/${b}`], { cwd: pushRepo, encoding: "utf8", env: ENV });
+      return r.status === 0 ? r.stdout.trim() : null;
+    };
+    fn({ ...ctx, pushRepo, pushSha });
+  });
+}
+
+test("refuses to push to the default branch of the pushurl's repo, not just the fetch URL's", () =>
+  withPushUrl(({ work, commit, gate, pushSha }) => {
+    git(work, "switch", "-q", "-c", "develop", "origin/main");
+    commit("feat: rate", FIX);
+    const before = pushSha("develop");
+    for (const args of [[], ["--base", "origin/main"]]) {
+      const r = gate(args);
+      assert.equal(r.status, 1, `${args.join(" ")}: ${r.stdout}`);
+      assert.match(r.stdout, /^FAIL: on develop, a default or base branch/);
+    }
+    assert.equal(pushSha("develop"), before, "develop was pushed to the pushurl's repo");
+  }));
+
+test("a feature branch with a pushurl passes and lands in the pushurl's repo", () =>
+  withPushUrl(({ commit, gate, pushSha, head }) => {
+    commit("feat: rate", FIX);
+    const r = gate();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(pushSha("fix-1"), head());
+  }));
+
+test("fails closed when the pushurl's repo names no default branch", () =>
+  withPushUrl(({ commit, gate, pushSha }) => {
+    commit("feat: rate", FIX);
+    const r = gate();
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /^FAIL: can't determine the default branch of origin's push URL/);
+    assert.equal(pushSha("fix-1"), null);
+  }, { pushDefault: "nowhere" }));
+
+test("--remote must name a configured remote: a URL fails closed, even when pushInsteadOf sends it elsewhere", () =>
+  withPushUrl(({ origin, pushRepo, work, commit, gate, pushSha, remoteSha }) => {
+    // `git push <origin URL>` lands in the push repo (default develop).
+    git(work, "config", "--unset", "remote.origin.pushurl");
+    git(work, "config", `url.${pushRepo}.pushInsteadOf`, origin);
+    git(work, "switch", "-q", "-c", "develop", "origin/main");
+    commit("feat: rate", FIX);
+    const before = pushSha("develop");
+    const r = gate(["--remote", origin, "--base", "origin/main"]);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /^FAIL: --remote .* is not a configured remote/);
+    assert.equal(pushSha("develop"), before, "develop was pushed to the pushInsteadOf repo");
+    git(work, "switch", "-q", "fix-1");
+    commit("feat: rate on fix-1", FIX);
+    const f = gate(["--remote", origin, "--base", "origin/main"]);
+    assert.equal(f.status, 1, f.stdout);
+    assert.match(f.stdout, /^FAIL: --remote .* is not a configured remote/);
+    assert.equal(remoteSha(), null);
+    assert.equal(pushSha("fix-1"), null);
+  }));
+
+test("fails closed when ls-remote would ask another repo than the push URL (chained insteadOf)", () =>
+  withPushUrl(({ root, work, pushRepo, commit, gate, pushSha }) => {
+    // The pushurl X: is rewritten once, to the push repo (default develop),
+    // and the push goes there; ls-remote of that URL is rewritten again, to
+    // a third repo whose default is main.
+    const other = join(root, "other.git");
+    git(root, "init", "-q", "--bare", "-b", "main", other);
+    git(work, "push", "-q", other, "main:main", "main:develop");
+    git(work, "config", "remote.origin.pushurl", "X:");
+    git(work, "config", `url.${pushRepo}.insteadOf`, "X:");
+    git(work, "config", `url.${other}.insteadOf`, pushRepo);
+    git(work, "switch", "-q", "-c", "develop", "origin/main");
+    commit("feat: rate", FIX);
+    const before = pushSha("develop");
+    const r = gate(["--base", "origin/main"]);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /^FAIL: can't determine the default branch of origin's push URL/);
+    assert.equal(pushSha("develop"), before, "develop was pushed to the push repo");
+  }));
+
 test("an untracked .gitignore can't hide files: only committed .gitignore files may", () => {
   // Self-ignoring dir/.gitignore hides itself and dir/evil.test.js from git status.
   withRepo(({ work, commit, gate, remoteSha }) => {
