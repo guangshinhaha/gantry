@@ -1,0 +1,15 @@
+#!/bin/sh
+# Check that a PR has a verifier's PASS or PASS+NOTES verdict at its current head:
+# the same check as the verdict-check workflow (scripts/verdict-check.mjs), from a
+# terminal or a script. Reads the PR live with `gh`.
+#
+#   gantry-verdict-check --pr <n> [--repo owner/name] [--label <name> | --no-label] [--trusted A,B]
+#
+# --label (default risk:high): a PR without it skips (exit 0). --no-label checks
+# the PR whatever its labels. --trusted: author_association values whose
+# comments count (default OWNER,MEMBER,COLLABORATOR). Without --repo, uses the
+# current directory's repo.
+#
+# Prints one line, `PASS: ...`, `SKIP: ...` or `FAIL: <reason>`.
+# Exit 0: pass or skip; 1: fail; 2: bad arguments or gh failed.
+exec node "$(cd "$(dirname "$0")/.." && pwd)/scripts/verdict-check.mjs" "$@"

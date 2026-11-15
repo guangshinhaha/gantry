@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 // Fail a labelled PR unless a verifier's verdict for its current head is posted.
-// Used by the verdict-check workflow; evaluate() is exported for node:test.
+// Used by the verdict-check workflow and, from a terminal or script, by
+// bin/gantry-verdict-check; evaluate() is exported for node:test.
 //
 //   GH_TOKEN=... REPO=owner/name PR=123 [LABEL=risk:high] [TRUSTED=OWNER,MEMBER,COLLABORATOR] \
 //     node scripts/verdict-check.mjs
+//   node scripts/verdict-check.mjs --pr 123 [--repo owner/name] [--label <name> | --no-label] [--trusted A,B]
+//
+// Flags override the env. --no-label checks the PR whether or not it carries
+// the label. Without a repo, uses the current directory's (`gh repo view`).
+// Exit 0: pass, or skip (no label); 1: fail; 2: bad arguments or gh failed.
 //
 // A verdict is a JSON object in a PR comment, bare or in a code fence:
 //   {"pr": 12, "head_sha": "<40 hex>", "verdict": "PASS|PASS+NOTES|FAIL", "evidence": [...]}
@@ -47,13 +53,14 @@ export function verdictsIn(body) {
 }
 
 /**
- * status: "skip" (PR doesn't carry the label), "pass" or "fail".
+ * status: "skip" (PR doesn't carry the label), "pass" or "fail". `label: null`
+ * checks every PR: it never skips.
  * Only verdicts from trusted authors, for this PR (when `pr` is given) and for
  * exactly the current head count. The newest of those decides: FAIL fails.
  * `comments` need id, created_at, body, author_association.
  */
 export function evaluate({ prNumber, headSha, labels, label = DEFAULT_LABEL, comments, trusted = DEFAULT_TRUSTED }) {
-  if (!labels.map((l) => l.toLowerCase()).includes(label.toLowerCase())) {
+  if (label !== null && !labels.map((l) => l.toLowerCase()).includes(label.toLowerCase())) {
     return { status: "skip", reason: `PR has no \`${label}\` label: nothing to check.` };
   }
   const head = headSha.toLowerCase();
@@ -83,24 +90,66 @@ export function evaluate({ prNumber, headSha, labels, label = DEFAULT_LABEL, com
 
 const gh = (path) => JSON.parse(execFileSync("gh", ["api", "--paginate", "--slurp", path], { encoding: "utf8" })).flat();
 
+/** Options from flags, falling back to the env. Throws Error(message) on a bad argument. */
+export function parseArgs(argv, env = {}) {
+  const o = {
+    repo: env.REPO || "",
+    pr: env.PR || "",
+    label: env.LABEL || DEFAULT_LABEL,
+    trusted: env.TRUSTED || DEFAULT_TRUSTED.join(","),
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const val = () => {
+      const v = argv[++i];
+      if (v === undefined || v === "" || v.startsWith("-")) throw new Error(`${a} needs a value`);
+      return v;
+    };
+    if (a === "--repo") o.repo = val();
+    else if (a === "--pr") o.pr = val();
+    else if (a === "--label") o.label = val();
+    else if (a === "--no-label") o.label = null;
+    else if (a === "--trusted") o.trusted = val();
+    else throw new Error(`unknown argument: ${a}`);
+  }
+  if (!/^[1-9][0-9]*$/.test(String(o.pr))) throw new Error("--pr <number> is required");
+  if (o.repo && !/^[\w.-]+\/[\w.-]+$/.test(o.repo)) throw new Error(`--repo must be owner/name, got: ${o.repo}`);
+  return {
+    ...o,
+    pr: Number(o.pr),
+    trusted: o.trusted.split(",").map((s) => s.trim()).filter(Boolean),
+  };
+}
+
 function main() {
-  const { REPO: repo, PR: pr } = process.env;
-  const label = process.env.LABEL || DEFAULT_LABEL;
-  const trusted = (process.env.TRUSTED || DEFAULT_TRUSTED.join(","))
-    .split(",").map((s) => s.trim()).filter(Boolean);
-  // Live PR state, not the event payload: a re-run carries the payload of the original run.
-  const prData = JSON.parse(execFileSync("gh", ["api", `repos/${repo}/pulls/${pr}`], { encoding: "utf8" }));
-  const comments = gh(`repos/${repo}/issues/${pr}/comments?per_page=100`);
-  const r = evaluate({
-    prNumber: Number(pr),
-    headSha: prData.head.sha,
-    labels: prData.labels.map((l) => l.name),
-    label,
-    comments,
-    trusted,
-  });
+  let o, r;
+  try {
+    o = parseArgs(process.argv.slice(2), process.env);
+  } catch (e) {
+    console.error(`verdict-check: ${e.message}`);
+    return 2;
+  }
+  try {
+    const repo = o.repo ||
+      execFileSync("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], { encoding: "utf8" }).trim();
+    // Live PR state, not the event payload: a re-run carries the payload of the original run.
+    const prData = JSON.parse(execFileSync("gh", ["api", `repos/${repo}/pulls/${o.pr}`], { encoding: "utf8" }));
+    const comments = gh(`repos/${repo}/issues/${o.pr}/comments?per_page=100`);
+    r = evaluate({
+      prNumber: o.pr,
+      headSha: prData.head.sha,
+      labels: prData.labels.map((l) => l.name),
+      label: o.label,
+      comments,
+      trusted: o.trusted,
+    });
+  } catch (e) {
+    console.error(`verdict-check: could not read PR ${o.pr} from GitHub: ${e.message}`);
+    return 2;
+  }
   const line = `${r.status.toUpperCase()}: ${r.reason}`;
-  console.log(r.status === "fail" ? `::error::${r.reason}` : line);
+  // An Actions annotation in the workflow; plain text in a terminal or script.
+  console.log(r.status === "fail" && process.env.GITHUB_ACTIONS ? `::error::${r.reason}` : line);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### verdict-check\n\n${line}\n`);
   return r.status === "fail" ? 1 : 0;
 }
