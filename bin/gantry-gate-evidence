@@ -1,0 +1,126 @@
+#!/bin/sh
+# Evidence gate for an agent's branch, before its PR is opened or merged. Run it
+# in the branch's worktree:
+#
+#   gantry-gate-evidence [--bug] [--base <ref>] [--remote <name>] [--force-with-lease]
+#
+# 1. --bug only: the branch needs a commit that changes only tests before its
+#    first commit that changes anything else (the fix). Markdown-only commits
+#    count neither way. Checked first, so a failing branch is never pushed.
+# 2. Pushes the branch, so the repo's pre-push hook (lefthook, running gantry's
+#    checks) runs. A refused push fails the gate with git's output, hook output
+#    included. It never parses CLAUDE.md: the hook decides which checks run.
+#
+# --base: the branch's base, default <remote>/HEAD, else <remote>/main or
+# <remote>/master. Commits are those on HEAD and not on the base.
+# --remote: default origin.
+# --force-with-lease: push with git's lease, for a branch whose history was
+# rewritten (a rebase) since its last push.
+#
+# Fails without pushing on: a detached HEAD, the base's own branch, uncommitted
+# or untracked files (the hook would test the working tree, not the commits),
+# no commits ahead of the base, or no pre-push hook installed.
+#
+# Prints `PASS: ...` or `FAIL: <reason>`, then any git output.
+# Exit 0: pass; 1: fail; 2: bad arguments.
+set -u
+
+NL='
+'
+BUG=0; BASE=""; REMOTE=origin; LEASE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --bug) BUG=1 ;;
+    --force-with-lease) LEASE=--force-with-lease ;;
+    --base | --remote)
+      case "${2:-}" in
+        "" | -*) echo "$1 needs a value" >&2; exit 2 ;;
+      esac
+      if [ "$1" = --base ]; then BASE=$2; else REMOTE=$2; fi
+      shift
+      ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+fail() {
+  printf 'FAIL: %s\n' "$1"
+  [ -z "${2:-}" ] || printf '%s\n' "$2"
+  exit 1
+}
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "not inside a git work tree"
+BRANCH=$(git symbolic-ref --short -q HEAD) || fail "HEAD is detached; check out the work branch"
+
+if [ -z "$BASE" ]; then
+  BASE=$(git symbolic-ref --short -q "refs/remotes/$REMOTE/HEAD" 2>/dev/null) || BASE=""
+  for b in "$REMOTE/main" "$REMOTE/master"; do
+    [ -n "$BASE" ] && break
+    git rev-parse -q --verify "refs/remotes/$b" >/dev/null && BASE=$b
+  done
+  [ -n "$BASE" ] || fail "can't find $REMOTE's default branch; pass --base <ref>"
+fi
+git rev-parse -q --verify "$BASE^{commit}" >/dev/null || fail "base $BASE is not a commit"
+[ "$BRANCH" != "${BASE#"$REMOTE"/}" ] || fail "on $BRANCH, the base branch itself; the gate pushes work branches only"
+
+dirty=$(git status --porcelain) || fail "git status failed"
+[ -z "$dirty" ] || fail "uncommitted or untracked files; the pre-push hook would test them, not the commits" "$dirty"
+
+COMMITS=$(git rev-list --reverse --no-merges "$BASE..HEAD") || fail "can't list commits since $BASE"
+[ -n "$COMMITS" ] || fail "no commits on $BRANCH ahead of $BASE"
+
+# test, md or code. Shell test scripts and *.bats are tests (shinfactory#215).
+kind() {
+  b=${1##*/}
+  case "$b" in *.md | *.markdown) echo md; return ;; esac
+  case "/$1" in */test/* | */tests/* | */__tests__/* | */spec/*) echo test; return ;; esac
+  case "$b" in
+    *.bats | *.test.* | *.spec.* | *_test.* | *_spec.* | test_*.py | \
+    test.sh | tests.sh | test-*.sh | test_*.sh | *-test.sh) echo test ;;
+    *) echo code ;;
+  esac
+}
+
+# A commit's kind: code if any file is code, else test if any is a test, else
+# none (Markdown-only or empty).
+commit_kind() {
+  k=none
+  files=$(git -c core.quotePath=false diff-tree --no-commit-id --name-only -r --root "$1")
+  set -f; IFS=$NL
+  for f in $files; do
+    case $(kind "$f") in
+      code) k="code"; break ;;
+      test) k="test" ;;
+    esac
+  done
+  set +f; unset IFS
+  echo "$k"
+}
+
+if [ "$BUG" = 1 ]; then
+  offenders=""; tested=0
+  for c in $COMMITS; do
+    case $(commit_kind "$c") in
+      test) tested=1; break ;;
+      code) offenders="$offenders  $(git log -1 --format='%h %s' "$c")$NL" ;;
+    esac
+  done
+  if [ -n "$offenders" ]; then
+    if [ "$tested" = 1 ]; then why="these commits change non-test files before the first test-only commit:"
+    else why="no test-only commit comes before these, which change non-test files:"; fi
+    fail "bug work needs a commit that changes only tests before the fix; $why" "${offenders%"$NL"}"
+  fi
+fi
+
+# A push with no pre-push hook would pass without running a check.
+hook=$(git rev-parse --git-path hooks/pre-push)
+[ -x "$hook" ] || fail "no pre-push hook at $hook, so pushing runs no checks; run \`lefthook install\`"
+
+# LEFTHOOK=0 or LEFTHOOK_EXCLUDE in the caller's env would skip the checks.
+unset LEFTHOOK LEFTHOOK_EXCLUDE
+# shellcheck disable=SC2086 # $LEASE is empty or one flag
+out=$(git push $LEASE -u "$REMOTE" "HEAD:refs/heads/$BRANCH" 2>&1) ||
+  fail "push of $BRANCH refused by the pre-push hook or $REMOTE; git push said:" "$out"
+printf 'PASS: pushed %s at %s to %s; pre-push hook passed\n' "$BRANCH" "$(git rev-parse HEAD)" "$REMOTE"
+printf '%s\n' "$out"
