@@ -54,11 +54,13 @@ jobs:
   # lets ci-ok report success.
   gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    # Up to 90s of it is waiting for a merge commit after a base change.
+    timeout-minutes: 4
     permissions:
       contents: read
       pull-requests: read
     outputs:
+      sha: ${{ steps.check.outputs.sha }}
       merged_pr: ${{ steps.check.outputs.merged_pr }}
       run_node: ${{ steps.check.outputs.run_node }}
       node_error: ${{ steps.check.outputs.node_error }}
@@ -69,6 +71,8 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
           PUSHED_REF: ${{ github.ref }}
@@ -85,6 +89,40 @@ jobs:
               --jq '[.check_runs[] | select(.app.slug == "github-actions" and (.name | test("(^| / )ci-ok$")))] | if length > 0 and all(.[]; .conclusion == "success") then 1 else 0 end' 2>/dev/null) || g=0
             [ "${g:-0}" -gt 0 ]
           }
+          # A re-run replays the event that started the run, base included, and
+          # github.sha stays the merge commit with that base. ci-retarget.yml
+          # re-runs ci when a PR's base changes (gantry#134), so when the PR's
+          # base is no longer the event's, wait for GitHub's merge commit of
+          # this head into the current base and test that instead. The file
+          # list below is read live, so it is already against the current base.
+          if [ "$EVENT" = pull_request ]; then
+            pull=$(gh api "repos/$REPO/pulls/$PR") || { echo "::error::could not read PR #$PR"; exit 1; }
+            live_base=$(printf '%s' "$pull" | jq -r .base.ref)
+            if [ "$live_base" != "$BASE_REF" ]; then
+              echo "The PR's base is now $live_base, not $BASE_REF as when this run started, so this run tests against $live_base."
+              merge_sha=""
+              for try in $(seq 1 18); do
+                if [ "$try" -gt 1 ]; then sleep 5; pull=$(gh api "repos/$REPO/pulls/$PR") || pull='{}'; fi
+                if [ "$(printf '%s' "$pull" | jq -r .head.sha)" != "$PR_HEAD" ]; then
+                  echo "::error::PR #$PR has moved on from ${PR_HEAD:0:7}, so this run's result can't stand for it. The run for its new head covers it."; exit 1
+                fi
+                case "$(printf '%s' "$pull" | jq -r .mergeable)" in
+                  false) echo "::error::PR #$PR conflicts with its new base $live_base, so it can't be tested against it. Resolve the conflict and push."; exit 1 ;;
+                  true)
+                    m=$(printf '%s' "$pull" | jq -r '.merge_commit_sha // empty')
+                    want="$(printf '%s' "$pull" | jq -r .base.sha) $PR_HEAD"
+                    if [ -n "$m" ] && [ "$(gh api "repos/$REPO/commits/$m" --jq '[.parents[].sha] | join(" ")' 2>/dev/null)" = "$want" ]; then
+                      merge_sha=$m; break
+                    fi ;;
+                esac
+              done
+              if [ -z "$merge_sha" ]; then
+                echo "::error::GitHub has no merge commit of ${PR_HEAD:0:7} into $live_base yet, so this run can't test against the new base. Re-run this workflow."; exit 1
+              fi
+              SHA=$merge_sha
+              echo "Testing merge commit ${SHA:0:7} of ${PR_HEAD:0:7} into $live_base."
+            fi
+          fi
           if [ "$EVENT" = push ]; then
             # Skip only on proof the checks already passed: a PR that merged
             # into this very branch (gantry#63) and whose head had a green
@@ -121,7 +159,7 @@ jobs:
             if [ "$EVENT" = pull_request ]; then
               entries=$(gh api --paginate "repos/$REPO/pulls/$PR/files" \
                 --jq '.[] | {f: .filename, p: .previous_filename} | @json')
-              changed=$(gh api "repos/$REPO/pulls/$PR" --jq .changed_files)
+              changed=$(printf '%s' "$pull" | jq -r .changed_files)
               listed=$(printf '%s\n' "$entries" | grep -c . || true)
               # The files API stops at 3000, so a shorter list than the PR's
               # changed_files hides the rest (gantry#61).
@@ -234,6 +272,7 @@ jobs:
               echo "::notice::Node checks skipped: $skip_reason"
             fi
           fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "merged_pr=$merged_pr" >> "$GITHUB_OUTPUT"
           echo "run_node=$run_node" >> "$GITHUB_OUTPUT"
           echo "node_error=${node_error:-}" >> "$GITHUB_OUTPUT"
@@ -244,9 +283,12 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     steps:
       # Full history, so the range below has both ends. It also fetches every
-      # branch, which is why the scan must name a range (gantry#36).
+      # branch, which is why the scan must name a range (gantry#36). The gate's
+      # sha is github.sha, or the merge commit with a PR's new base on a re-run
+      # after a base change (gantry#134).
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.gate.outputs.sha }}
           fetch-depth: 0
       # Downloads the gitleaks build for this runner's OS and arch and checks it
       # against a pinned sha256 (gantry#67). A gitleaks already on PATH is used
@@ -437,7 +479,10 @@ jobs:
           echo "::error::$NODE_ERROR"
           exit 1
 
+      # github.sha, or the merge commit with a PR's new base (see the gate).
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
 
       # The checks below are bin/gantry-check, the script the pre-push hook in
       # hooks/node.yml also runs, so each has one definition (gantry#125).

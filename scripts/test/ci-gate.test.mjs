@@ -36,12 +36,17 @@ const GH = `#!/bin/bash
 filter() { while [ $# -gt 0 ]; do [ "$1" = --jq ] && { printf '%s' "$2"; return; }; shift; done; }
 case "$*" in
   *"/pulls/"*"/files"*) printf '%s' "$STUB_FILES" | jq -r "$(filter "$@")" ;;
-  *"/pulls/"*) printf '%s' "$STUB_PR" | jq -r "$(filter "$@")" ;;
+  *"/pulls/"*)
+    if [ -n "$STUB_PRS" ]; then
+      n=$(cat "$RUNNER_TEMP/pr-polls" 2>/dev/null || echo 0); echo $((n + 1)) > "$RUNNER_TEMP/pr-polls"
+      f=$(filter "$@"); printf '%s' "$STUB_PRS" | jq -c --argjson n "$n" '.[[$n, length - 1] | min]' | jq -r "\${f:-.}"
+    else f=$(filter "$@"); printf '%s' "$STUB_PR" | jq -r "\${f:-.}"; fi ;;
   *"/compare/"*) [ "$STUB_COMPARE" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }; f=$(filter "$@"); printf '%s' "$STUB_COMPARE" | jq -r "\${f:-.}" ;;
   *"/commits/"*"/pulls"*) [ "$STUB_MERGED" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_MERGED" | jq -r "$(filter "$@")" ;;
   *"/commits/def/check-runs"*) [ -n "$STUB_CHECKS_BEFORE" ] && { [ "$STUB_CHECKS_BEFORE" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_CHECKS_BEFORE" | jq -r "$(filter "$@")"; exit 0; }
      [ "$STUB_CHECKS" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_CHECKS" | jq -r "$(filter "$@")" ;;
   *"/commits/"*"/check-runs"*) [ "$STUB_CHECKS" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_CHECKS" | jq -r "$(filter "$@")" ;;
+  *"/commits/"*) f=$(filter "$@"); printf '%s' "$STUB_COMMIT" | jq -r "\${f:-.}" ;;
   *"/contents/package.json"*)
     case "$STUB_ROOT" in
       200) exit 0 ;;
@@ -72,6 +77,7 @@ function runGate({
   root, tree = [], truncated = false, treeFails = false, treeBody = "", gitPaths = null, node = "true", codegen = "false",
   files = ["src/x.ts"], changed = files.length, event = "pull_request", compare = [], compareStatus = "ahead", merged = [],
   ref = "refs/heads/main", checks = { check_runs: [] }, checksBefore = "",
+  baseRef = "main", prs = null, commit = {},
 }) {
   const entry = (f) => (typeof f === "string" ? { filename: f } : f);
   const dir = mkdtempSync(join(tmpdir(), "gantry-gate-"));
@@ -79,6 +85,9 @@ function runGate({
   chmodSync(join(dir, "gh"), 0o755);
   writeFileSync(join(dir, "git"), GIT);
   chmodSync(join(dir, "git"), 0o755);
+  // The retarget wait polls with sleep; don't really wait.
+  writeFileSync(join(dir, "sleep"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(dir, "sleep"), 0o755);
   const treeFile = join(dir, "tree.json");
   writeFileSync(
     treeFile,
@@ -93,7 +102,9 @@ function runGate({
         PATH: `${dir}:${process.env.PATH}`,
         GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary,
         REPO: "o/r", EVENT: event, PR: "1", SHA: "abc", BEFORE: event === "push" ? "def" : "",
-        STUB_FILES: JSON.stringify(files.map(entry)), STUB_PR: JSON.stringify({ changed_files: changed }),
+        BASE_REF: baseRef, PR_HEAD: "h1",
+        STUB_FILES: JSON.stringify(files.map(entry)), STUB_PR: JSON.stringify({ changed_files: changed, base: { ref: "main" } }),
+        STUB_PRS: prs ? JSON.stringify(prs.map((p) => ({ changed_files: changed, ...p }))) : "", STUB_COMMIT: JSON.stringify(commit),
         STUB_COMPARE: compare === "fail" ? "fail" : JSON.stringify({ status: compareStatus, files: compare.map(entry) }), STUB_MERGED: merged === "fail" ? "fail" : JSON.stringify(merged),
         PUSHED_REF: ref, STUB_CHECKS_BEFORE: checksBefore === "fail" ? "fail" : checksBefore ? JSON.stringify(checksBefore) : "", STUB_CHECKS: checks === "fail" ? "fail" : JSON.stringify(checks),
         NODE_INPUT: node, HAS_CODEGEN: codegen, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
@@ -456,4 +467,76 @@ test("gantry#117: a merged PR whose base has no ci-ok or an unreadable one doesn
 test("gantry#117: green PR head and green base still skip", () => {
   const r = pushRun({ merged: [prInto("main")], checks: ciOk("success"), checksBefore: ciOk("success") });
   assert.equal(r.outputs.merged_pr, "true");
+});
+
+// gantry#134: ci-retarget.yml re-runs ci after a base change. A re-run replays the
+// old event, so the gate reads the PR's live base and, when it differs, tests
+// GitHub's merge commit of the head into the new base instead of github.sha.
+const live = (over = {}) => ({ base: { ref: "main", sha: "b2" }, head: { sha: "h1" }, mergeable: true, merge_commit_sha: "m2", ...over });
+const parents = { parents: [{ sha: "b2" }, { sha: "h1" }] };
+
+test("gantry#134: same base as the event: the gate keeps github.sha", () => {
+  const r = runGate({ root: 200 });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.sha, "abc");
+});
+
+test("gantry#134: a push outputs github.sha", () => {
+  const r = runGate({ root: 200, event: "push", compare: ["src/x.ts"] });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.sha, "abc");
+});
+
+test("gantry#134: a re-run after a retarget tests the merge commit with the new base", () => {
+  const r = runGate({ root: 200, baseRef: "feature", prs: [live()], commit: parents });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.sha, "m2");
+  assert.match(r.log, /base is now main, not feature/);
+});
+
+test("gantry#134: the gate waits until GitHub has made the new merge commit", () => {
+  // First mergeable is unknown, then the merge commit is still the old one, then it's ready.
+  const r = runGate({
+    root: 200, baseRef: "feature", commit: parents,
+    prs: [live({ mergeable: null, merge_commit_sha: null }), live({ merge_commit_sha: "m2", base: { ref: "main", sha: "b-old" } }), live()],
+  });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.sha, "m2");
+});
+
+test("gantry#134: no merge commit for the new base in time fails the gate", () => {
+  const r = runGate({ root: 200, baseRef: "feature", prs: [live({ mergeable: null, merge_commit_sha: null })], commit: parents });
+  assert.notEqual(r.status, 0);
+  assert.match(r.log, /no merge commit of h1 into main yet/);
+});
+
+test("gantry#134: a merge commit whose parents aren't the new base and head is not used", () => {
+  const r = runGate({ root: 200, baseRef: "feature", prs: [live()], commit: { parents: [{ sha: "b-old" }, { sha: "h1" }] } });
+  assert.notEqual(r.status, 0);
+});
+
+test("gantry#134: a conflict with the new base fails the gate", () => {
+  const r = runGate({ root: 200, baseRef: "feature", prs: [live({ mergeable: false, merge_commit_sha: null })] });
+  assert.notEqual(r.status, 0);
+  assert.match(r.log, /conflicts with its new base main/);
+});
+
+test("gantry#134: a head that moved on fails the re-run instead of testing another commit", () => {
+  const r = runGate({ root: 200, baseRef: "feature", prs: [live({ head: { sha: "h2" } })], commit: parents });
+  assert.notEqual(r.status, 0);
+  assert.match(r.log, /has moved on from h1/);
+});
+
+test("gantry#134: a retarget that makes a docs-only PR include code runs node", () => {
+  // The file list is the PR's live one, so it is already against the new base.
+  const r = runGate({ root: 200, baseRef: "feature", prs: [live()], commit: parents, files: ["docs/a.md", "src/quota.ts"] });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.run_node, "true");
+});
+
+test("gantry#134: secrets and node check out the gate's sha", () => {
+  const ci = readFileSync(CI, "utf8");
+  assert.match(ci, /^ {6}sha: \$\{\{ steps\.check\.outputs\.sha \}\}$/m);
+  const refs = ci.match(/- uses: actions\/checkout@v4\n\s+with:\n\s+ref: \$\{\{ needs\.gate\.outputs\.sha \}\}/g) ?? [];
+  assert.equal(refs.length, 2, "both the secrets and the node checkout use the gate's sha");
 });

@@ -1,0 +1,56 @@
+# gantry reusable workflow: when a PR's base changes, re-run the PR's ci so a
+# green from the old base can't stand (gantry#65, gantry#134). Call it from a
+# workflow that listens for `pull_request: edited`, not from the ci caller: an
+# `edited` run in ci would be skipped on a title or body edit and, as ci's latest
+# run for the head, reset the required `gantry / ci-ok`. See
+# template/.github/workflows/ci-retarget.yml.
+#
+# The re-run makes ci's latest run unfinished again, so `gantry / ci-ok` blocks
+# the merge at once, and ci's gate tests the merge with the new base. A ci run
+# still going started on the old base, so it is cancelled and then re-run.
+name: gantry-ci-retarget
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: '"ubuntu-latest"'
+      gantry-ref:
+        description: gantry ref for the re-run script
+        type: string
+        default: main
+      ci-workflow:
+        description: Path of the caller repo's ci workflow, the one whose run is re-run
+        type: string
+        default: .github/workflows/ci.yml
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  rerun:
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base && !github.event.pull_request.draft }}
+    # A second retarget supersedes the first.
+    concurrency:
+      group: ci-retarget-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    steps:
+      - name: Re-run the PR's ci against its new base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          GANTRY_REF: ${{ inputs.gantry-ref }}
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/scripts/ci-retarget.mjs" -o "$RUNNER_TEMP/ci-retarget.mjs"
+          node "$RUNNER_TEMP/ci-retarget.mjs"
