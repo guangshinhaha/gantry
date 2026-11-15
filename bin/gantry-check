@@ -1,0 +1,56 @@
+#!/bin/sh
+# The one definition of each Node check. The pre-push hook (hooks/node.yml) and
+# the CI node job (.github/workflows/ci.yml) both run this, so changing a
+# check's command here changes both (gantry#125). Run from the repo root:
+#
+#   gantry-check lint|format|typecheck|test|audit
+#
+# A check whose script, config or lockfile is missing skips and says why. In CI
+# the reason also goes to $GITHUB_STEP_SUMMARY. The package manager comes from
+# the lockfile (pnpm > npm).
+set -eu
+
+pm=npm
+if [ -f pnpm-lock.yaml ]; then pm=pnpm; fi
+
+skip() {
+  echo "$1"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then echo "$1" >> "$GITHUB_STEP_SUMMARY"; fi
+}
+
+# package.json has a script named $1.
+has_script() {
+  [ -f package.json ] &&
+    node -e 'process.exit(require("./package.json").scripts?.[process.argv[1]] ? 0 : 1)' "$1"
+}
+
+case "${1:-}" in
+  lint)
+    if has_script lint:ci; then exec $pm run lint:ci
+    elif has_script lint; then exec $pm run lint
+    else skip "Lint skipped: no lint:ci or lint script"
+    fi ;;
+  format)
+    if has_script format:check; then exec $pm run format:check
+    else skip "Format check skipped: no format:check script"
+    fi ;;
+  typecheck)
+    if [ ! -f tsconfig.json ]; then skip "Typecheck skipped: no tsconfig.json"; exit 0; fi
+    if [ ! -x node_modules/.bin/tsc ]; then
+      echo "Typecheck failed: tsconfig.json exists but node_modules/.bin/tsc doesn't. Add typescript to devDependencies and install." >&2
+      exit 1
+    fi
+    exec node_modules/.bin/tsc --noEmit ;;
+  test)
+    if has_script test; then exec $pm run test
+    else skip "Unit tests skipped: no test script"
+    fi ;;
+  audit)
+    if [ -f pnpm-lock.yaml ]; then exec pnpm audit --audit-level high --prod
+    elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then exec npm audit --audit-level=high --omit=dev
+    else skip "Dependency audit skipped: no pnpm-lock.yaml or package-lock.json"
+    fi ;;
+  *)
+    echo "usage: gantry-check lint|format|typecheck|test|audit" >&2
+    exit 2 ;;
+esac

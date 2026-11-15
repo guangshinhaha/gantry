@@ -17,7 +17,10 @@ const jobs = (results, failedSteps = []) =>
 
 test("pinCaller points the caller at the sha", () => {
   const text = "    uses: guangshinhaha/gantry/.github/workflows/ci.yml@main\n    permissions:\n";
-  assert.equal(pinCaller(text, SHA), `    uses: guangshinhaha/gantry/.github/workflows/ci.yml@${SHA}\n    permissions:\n`);
+  assert.equal(pinCaller(text, SHA), `    uses: guangshinhaha/gantry/.github/workflows/ci.yml@${SHA}\n    with:\n      gantry-ref: ${SHA}\n    permissions:\n`);
+  // An existing `with:` gets the input added, not a second `with:`.
+  const withNode = "    uses: guangshinhaha/gantry/.github/workflows/ci.yml@main\n    with:\n      node: false\n";
+  assert.equal(pinCaller(withNode, SHA), `    uses: guangshinhaha/gantry/.github/workflows/ci.yml@${SHA}\n    with:\n      gantry-ref: ${SHA}\n      node: false\n`);
   assert.throws(() => pinCaller("uses: someone/else/ci.yml@main", SHA), /no gantry ci.yml/);
 });
 

@@ -30,6 +30,10 @@ on:
         description: 'Command that regenerates committed generated files (e.g. "pnpm prisma generate", "make generate"). The node job runs it after install and fails if it changes any file git tracks or adds one. Empty skips the check.'
         type: string
         default: ""
+      gantry-ref:
+        description: 'gantry ref the node job fetches bin/gantry-check from, the same script the pre-push hook runs. Leave it at main when calling ci.yml@main; set the same sha when pinning ci.yml to one.'
+        type: string
+        default: main
 
 permissions:
   contents: read
@@ -435,6 +439,13 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      # The checks below are bin/gantry-check, the script the pre-push hook in
+      # hooks/node.yml also runs, so each has one definition (gantry#125).
+      - name: Fetch gantry-check
+        env:
+          GANTRY_REF: ${{ inputs.gantry-ref }}
+        run: curl -sSfL "https://raw.githubusercontent.com/guangshinhaha/gantry/${GANTRY_REF}/bin/gantry-check" -o "$RUNNER_TEMP/gantry-check"
+
       - name: Detect package manager
         id: pm
         run: |
@@ -505,49 +516,25 @@ jobs:
       # Install to have succeeded.
       - name: Lint
         id: lint
-        run: |
-          pm="${{ steps.pm.outputs.pm }}"
-          if node -e 'process.exit(require("./package.json").scripts?.["lint:ci"] ? 0 : 1)'; then
-            $pm run lint:ci
-          elif node -e 'process.exit(require("./package.json").scripts?.lint ? 0 : 1)'; then
-            $pm run lint
-          else
-            echo "Lint skipped: no lint:ci or lint script" | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+        run: sh "$RUNNER_TEMP/gantry-check" lint
 
       # Skips when the repo has no `format:check` script. Catches unformatted
       # files (e.g. from gantry-init) before they turn main red.
       - name: Format check
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: |
-          pm="${{ steps.pm.outputs.pm }}"
-          if node -e 'process.exit(require("./package.json").scripts?.["format:check"] ? 0 : 1)'; then
-            $pm run format:check
-          else
-            echo "Format check skipped: no format:check script" | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+        run: sh "$RUNNER_TEMP/gantry-check" format
 
       - name: Typecheck
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: |
-          if [ -f tsconfig.json ]; then npx tsc --noEmit
-          else echo "Typecheck skipped: no tsconfig.json" | tee -a "$GITHUB_STEP_SUMMARY"; fi
+        run: sh "$RUNNER_TEMP/gantry-check" typecheck
 
       - name: Unit tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: |
-          pm="${{ steps.pm.outputs.pm }}"
-          if node -e 'process.exit(require("./package.json").scripts?.test ? 0 : 1)'; then
-            $pm run test
-          else
-            echo "Unit tests skipped: no test script" | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+        run: sh "$RUNNER_TEMP/gantry-check" test
 
       - name: Dependency audit (high+)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: |
-          if [ "${{ steps.pm.outputs.pm }}" = pnpm ]; then pnpm audit --audit-level high --prod
-          else npm audit --audit-level=high --omit=dev; fi
+        run: sh "$RUNNER_TEMP/gantry-check" audit
 
       - name: E2E
         if: ${{ !cancelled() && steps.install.outcome == 'success' && inputs.e2e }}

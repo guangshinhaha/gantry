@@ -161,10 +161,13 @@ function hiddenKeyScenarios() {
   ];
 }
 
-// Point the sandbox's caller workflow at ci.yml@sha.
+// Point the sandbox's caller workflow at ci.yml@sha, and its node job at
+// bin/gantry-check from the same sha (the gantry-ref input).
 export function pinCaller(text, sha) {
   if (!PIN.test(text)) throw new Error(`no gantry ci.yml reference in ${CALLER}`);
-  return text.replace(PIN, `$1@${sha}`);
+  const pinned = text.replace(PIN, `$1@${sha}`);
+  if (/^ {4}with:\s*$/m.test(pinned)) return pinned.replace(/^ {4}with:\s*$/m, `$&\n      gantry-ref: ${sha}`);
+  return pinned.replace(/^( *uses: guangshinhaha\/gantry\/\.github\/workflows\/ci\.yml@\S+)$/m, `$1\n    with:\n      gantry-ref: ${sha}`);
 }
 
 // Compare one finished run against a scenario. Returns a list of problems,

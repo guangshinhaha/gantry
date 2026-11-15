@@ -51,6 +51,9 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
 **On every pull request** (GitHub Actions)
 - The same checks again on a clean machine: secrets, lint (`lint:ci` if defined, else `lint`), format check, typecheck, tests, audit.
   Every check runs even if an earlier one fails, so one push shows all failures. A failed install still stops the job.
+  The push hook and CI run the same script, `bin/gantry-check <name>`, so a check is defined once and the two can't drift (gantry#125).
+  The hook runs lefthook's copy of gantry at `ref: main`. CI downloads the script at the `gantry-ref` input (default `main`).
+  If you pin `ci.yml` to a sha, set `gantry-ref` to the same sha.
 - **Mutation testing** on the files the PR changed (see below). Survivors are
   posted as a PR comment.
 - **`needs-human` label** when the PR touches a risky path (auth, migrations,
@@ -653,6 +656,7 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
   selftest.yml  on gantry PRs that change ci.yml, runs that ci.yml on sample PRs in
                 gantry-sandbox and fails if a check stopped firing; repos don't call it
 template/       files gantry-init copies into a repo
+bin/gantry-check runs one Node check (lint|format|typecheck|test|audit); the push hook and ci.yml both call it
 bin/gantry-init sets a repo up
 bin/gantry-protect requires gantry / ci-ok, plus any --require, on the default branch (ruleset)
 scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
