@@ -53,7 +53,7 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   Every check runs even if an earlier one fails, so one push shows all failures. A failed install still stops the job.
   The push hook and CI run the same script, `bin/gantry-check <name>`, so a check is defined once and the two can't drift (gantry#125).
   The hook runs lefthook's copy of gantry at `ref: main`. CI downloads the script at the `gantry-ref` input (default `main`).
-  If you pin `ci.yml` to a sha, set `gantry-ref` to the same sha.
+  If you pin `ci.yml` to a sha, set `gantry-ref` to the same sha, and pin `ci-retarget.yml` and its `gantry-ref` to it too: a `ci.yml` from before gantry#134 has no live-base check, so a re-run of it tests the old base.
 - **Mutation testing** on the files the PR changed (see below). Survivors are
   posted as a PR comment.
 - **`needs-human` label** when the PR touches a risky path (auth, migrations,
