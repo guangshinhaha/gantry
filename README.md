@@ -440,6 +440,7 @@ to the PR's current head. Without the label the check skips.
 - Posting, editing or deleting a comment that holds a verdict (the marker is its `"head_sha"` key) on an open PR re-runs the PR's runs of the calling workflow at its head (a PR opened with the label has one per event; a run still going is waited for first), so the check turns green or red by itself. `gantry-init --verdict-check` adds a caller that does this. The caller must be on the default branch, because comment events run there, and it needs `actions: write` for the re-run. A caller without `actions: write` fails to start (`startup_failure`) on every event, so its check never reports: add the permission when upgrading an older caller. Without `issue_comment` in the caller, re-run by hand (`gh run rerun <id>`).
 - The check still shows its earlier result until the re-run starts, a few seconds after the comment. Don't merge in that gap.
 - It checks that a verdict exists, not that it is right or independent: the author can post their own `PASS` if they hold one of those roles. Who sets the label is up to you.
+- To run the same check from a terminal or a script, use `bin/gantry-verdict-check` (see [Gates for agent branches](#gates-for-agent-branches)).
 
 ### Label High-risk PRs automatically
 
@@ -497,6 +498,67 @@ jobs:
   endpoint, which the workflow token accepts.
 - The `verdict-check / verdict-check` job now runs on every PR and skips inside
   the script when there is no label, instead of being skipped by the workflow.
+
+## Gates for agent branches
+
+Two commands for a script that turns an agent's branch into a merged PR (the
+factory runs both). Neither has judgment, and neither knows about issues,
+labels or Orca: the caller decides when to run them and what a failure means.
+
+**`bin/gantry-gate-evidence`**, in the branch's worktree, before the PR is
+opened or merged:
+
+```sh
+gantry-gate-evidence [--bug] [--base <ref>] [--remote <name>] [--force-with-lease]
+```
+
+- It pushes the branch (`HEAD` to `<remote>/<branch>`, upstream set), so the
+  repo's pre-push hook runs gantry's checks. A refused push fails the gate, and
+  the output is git's, hook output included. It never reads CLAUDE.md: the hook
+  decides which checks run. The caller's `LEFTHOOK*` variables (`LEFTHOOK=0`,
+  `LEFTHOOK_BIN`, `LEFTHOOK_CONFIG`, ...) and git config passed through the env
+  (`git -c`, `GIT_CONFIG_COUNT`) are dropped, so they can't skip or swap the checks.
+  A hook that prints lefthook's `Can't find lefthook in PATH` (it exits 0) fails
+  the gate, though the branch is already pushed by then.
+- `--bug`: the branch needs a commit that adds or changes tests, and nothing
+  else, before its first commit that changes anything else. Checked before the
+  push, so a failing branch isn't pushed. The failure names each offending
+  commit (`<sha> <subject>`, `(merge)` for a merge). A test is a file under
+  `test/`, `tests/`, `__tests__/` or `spec/`, or named `*.test.*`, `*.spec.*`,
+  `*_test.*`, `*_spec.*`, `test_*.py`, `*.bats`, or a shell script `test.sh`,
+  `tests.sh`, `test-*.sh`, `test_*.sh`, `*-test.sh`. A Markdown-only commit, or
+  one that only deletes tests, counts neither way. It is judged by path only.
+- The branch's commits are those on `HEAD`'s first-parent line and not on
+  `--base` (default `<remote>/HEAD`, else `<remote>/main` or `<remote>/master`).
+  A merge counts as everything it brings in over its first parent, so merging
+  the default branch in before the test commit fails `--bug`: rebase instead.
+- It fails without pushing on: a detached `HEAD`; a branch named `main`,
+  `master`, the remote's default or the base's (whatever `--base` says);
+  uncommitted or untracked files, or index entries marked assume-unchanged or
+  skip-worktree (the hook would test the working tree, not the commits; a
+  sparse checkout fails here); no commits ahead of the base; or no executable
+  pre-push hook file (a push would run no checks; run `lefthook install`).
+  `core.hooksPath` from the repo's config is respected.
+- `--force-with-lease`: for a branch rebased since its last push. Without it a
+  rewritten branch's push is refused, and so is the gate.
+- Prints `PASS: pushed <branch> at <sha> to <remote>; ...` or `FAIL: <reason>`,
+  then git's output. Exit 0 pass, 1 fail, 2 bad arguments.
+- It doesn't open a PR. The PR's title, body and `Closes #N` belong to the caller.
+
+**`bin/gantry-verdict-check`**, before a merge: the [verdict check](#verdict-check)
+itself (same script, same rules), reading the PR live with `gh`:
+
+```sh
+gantry-verdict-check --pr <n> [--repo owner/name] [--label <name> | --no-label] [--trusted A,B]
+```
+
+- `--no-label` checks the PR whatever its labels; with `--label` (default
+  `risk:high`) an unlabelled PR skips, as in the workflow.
+- Without `--repo`, it uses the current directory's repo. The workflow's env
+  (`REPO`, `PR`, `LABEL`, `TRUSTED`) is ignored, so a stray variable can't point
+  it at another PR. It works through a symlinked checkout or a symlink on `PATH`.
+- Prints `PASS: ...`, `SKIP: ...` or `FAIL: <reason>`. Exit 0 pass or skip, 1
+  fail, 2 bad arguments or `gh` failed (never a pass).
 
 ## Secret scan
 
@@ -658,6 +720,8 @@ template/       files gantry-init copies into a repo
 bin/gantry-check runs one Node check (lint|format|typecheck|test|audit); the push hook and ci.yml both call it
 bin/gantry-init sets a repo up
 bin/gantry-protect requires gantry / ci-ok, plus any --require, on the default branch (ruleset)
+bin/gantry-gate-evidence pushes an agent's branch through its pre-push hook; --bug needs a test-first commit
+bin/gantry-verdict-check runs scripts/verdict-check.mjs from a terminal or script
 scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 preview-railway.mjs: Railway adapter, finds and checks the preview URL
                 preview-vercel.mjs: Vercel adapter, reads the GitHub deployment status
