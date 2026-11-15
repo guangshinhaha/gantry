@@ -537,7 +537,10 @@ gantry-gate-evidence [--bug] [--base <ref>] [--remote <name>] [--force-with-leas
   URLs (`git remote get-url --push --all <remote>`, so `remote.<name>.pushurl`
   when set), which may be another repo: each one that differs from the fetch
   URL is asked the same way, its default is never pushed to either, and the
-  gate fails if it names none.
+  gate fails if it names none, or if ls-remote would rewrite it again (chained
+  `url.<base>.insteadOf` rules) and so ask another repo than the push lands in.
+  `--remote` must name a configured remote; a URL fails, since a push to a URL
+  applies `pushInsteadOf` rules the gate can't check.
   A merge counts as everything it brings in over its first parent, so merging
   the default branch in before the test commit fails `--bug`: rebase instead.
 - It fails without pushing on: a detached `HEAD`; a branch named `main`,

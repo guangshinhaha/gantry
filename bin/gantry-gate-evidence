@@ -18,11 +18,13 @@
 # fails or names none, the gate fails closed, even with the local ref set. The
 # push goes to `git remote get-url --push --all <remote>` (remote.<remote>.pushurl
 # when set); each push URL other than the fetch URL is asked the same way, its
-# default is guarded too, and the gate fails closed if it names none.
+# default is guarded too, and the gate fails closed if it names none, or if
+# ls-remote would rewrite the URL again (chained insteadOf) and ask another repo.
 # --base: the branch's base, default <remote>'s default branch (as ls-remote
 # names it, else the local ref), else <remote>/main or <remote>/master. Commits
 # are those on HEAD's first-parent line and not on the base.
-# --remote: default origin.
+# --remote: a configured remote's name, default origin. Anything else (a URL)
+# fails closed: `git push <URL>` applies pushInsteadOf, which the gate can't see.
 # --force-with-lease: push with git's lease, for a branch whose history was
 # rewritten (a rebase) since its last push.
 #
@@ -76,6 +78,10 @@ GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "not inside a git work tree"
 BRANCH=$(git symbolic-ref --short -q HEAD) || fail "HEAD is detached; check out the work branch"
 cd "$(git rev-parse --show-toplevel)" || fail "can't cd to the work tree's top level"
+# A URL isn't a remote: `git push <URL>` applies pushInsteadOf, which no
+# get-url can show, so the gate can't tell which repo the push lands in.
+FETCH_URL=$(git remote get-url "$REMOTE" 2>&1) ||
+  fail "--remote $REMOTE is not a configured remote, or git can't read it; pass a remote's name (git remote -v lists them). git remote get-url said:" "$FETCH_URL"
 
 # <remote>'s default branch, as the local ref has it and as the remote says: the
 # local ref may be unset (a plain `git remote add` and fetch) or stale.
@@ -89,12 +95,17 @@ REMOTE_DEFAULT=$(git ls-remote --symref "$REMOTE" HEAD 2>/dev/null |
 # The push goes to <remote>'s push URLs (remote.<remote>.pushurl, else every
 # url), which may be another repo with another default branch. Ask each one that
 # differs from the fetch URL for its default, and never push to that either.
-# <remote> given as a URL rather than a name is its own push URL.
-FETCH_URL=$(git remote get-url "$REMOTE" 2>/dev/null) || FETCH_URL=$REMOTE
-PUSH_URLS=$(git remote get-url --push --all "$REMOTE" 2>/dev/null) || PUSH_URLS=$REMOTE
+# get-url has already applied insteadOf once, as the push does; ls-remote of a
+# URL applies it again, so a URL it would rewrite (chained insteadOf rules)
+# means ls-remote would ask another repo than the push lands in: fail closed.
+PUSH_URLS=$(git remote get-url --push --all "$REMOTE" 2>/dev/null) ||
+  fail "can't read $REMOTE's push URLs (git remote get-url --push --all $REMOTE)"
 set -f; IFS=$NL
 for u in $PUSH_URLS; do
   [ "$u" = "$FETCH_URL" ] && continue
+  asked=$(git ls-remote --get-url "$u" 2>/dev/null) || asked=""
+  [ "$asked" = "$u" ] ||
+    fail "can't determine the default branch of $REMOTE's push URL $u: ls-remote would ask ${asked:-nothing} instead (chained url.<base>.insteadOf rules), so the gate can't tell whether pushing $BRANCH there pushes its default"
   d=$(git ls-remote --symref "$u" HEAD 2>/dev/null |
     awk '$1 == "ref:" && $3 == "HEAD" { sub(/^refs\/heads\//, "", $2); print $2; exit }') || d=""
   [ -n "$d" ] ||
