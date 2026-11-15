@@ -54,13 +54,12 @@ jobs:
   # lets ci-ok report success.
   gate:
     runs-on: ubuntu-latest
-    # Up to 90s of it is waiting for a merge commit after a base change.
-    timeout-minutes: 4
+    timeout-minutes: 2
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      sha: ${{ steps.check.outputs.sha }}
+      merge_into: ${{ steps.check.outputs.merge_into }}
       merged_pr: ${{ steps.check.outputs.merged_pr }}
       run_node: ${{ steps.check.outputs.run_node }}
       node_error: ${{ steps.check.outputs.node_error }}
@@ -92,42 +91,21 @@ jobs:
           # A re-run replays the event that started the run, base included, and
           # github.sha stays the merge commit with that base. ci-retarget.yml
           # re-runs ci when a PR's base changes (gantry#134), so when the PR's
-          # base is no longer the event's, wait for GitHub's merge commit of
-          # this head into the current base and test that instead. The file
-          # list below is read live, so it is already against the current base.
+          # base is no longer the event's, the secrets and node jobs merge the
+          # head into the current base and test that. GitHub's own merge commit
+          # can't be used: it can stay on the old base for minutes after a
+          # retarget. The file list below is read live, so it is already
+          # against the current base.
+          merge_into=""
           if [ "$EVENT" = pull_request ]; then
             pull=$(gh api "repos/$REPO/pulls/$PR") || { echo "::error::could not read PR #$PR"; exit 1; }
             live_base=$(printf '%s' "$pull" | jq -r .base.ref)
             if [ "$live_base" != "$BASE_REF" ]; then
-              echo "The PR's base is now $live_base, not $BASE_REF as when this run started, so this run tests against $live_base."
-              merge_sha=""
-              state=""
-              for try in $(seq 1 18); do
-                # A failed read is retried, not taken for a moved head.
-                if [ "$try" -gt 1 ]; then sleep 5; pull=$(gh api "repos/$REPO/pulls/$PR") || continue; fi
-                if [ "$(printf '%s' "$pull" | jq -r .head.sha)" != "$PR_HEAD" ]; then
-                  echo "::error::PR #$PR has moved on from ${PR_HEAD:0:7}, so this run's result can't stand for it. The run for its new head covers it."; exit 1
-                fi
-                # Just after a base change, mergeable can still be the old base's
-                # answer, so a false only counts if it lasts the whole wait.
-                state=$(printf '%s' "$pull" | jq -r .mergeable)
-                case "$state" in
-                  true)
-                    m=$(printf '%s' "$pull" | jq -r '.merge_commit_sha // empty')
-                    want="$(printf '%s' "$pull" | jq -r .base.sha) $PR_HEAD"
-                    if [ -n "$m" ] && [ "$(gh api "repos/$REPO/commits/$m" --jq '[.parents[].sha] | join(" ")' 2>/dev/null)" = "$want" ]; then
-                      merge_sha=$m; break
-                    fi ;;
-                esac
-              done
-              if [ -z "$merge_sha" ] && [ "$state" = false ]; then
-                echo "::error::PR #$PR conflicts with its new base $live_base, so it can't be tested against it. Resolve the conflict and push."; exit 1
+              if [ "$(printf '%s' "$pull" | jq -r .head.sha)" != "$PR_HEAD" ]; then
+                echo "::error::PR #$PR has moved on from ${PR_HEAD:0:7}, so this run's result can't stand for it. The run for its new head covers it."; exit 1
               fi
-              if [ -z "$merge_sha" ]; then
-                echo "::error::GitHub has no merge commit of ${PR_HEAD:0:7} into $live_base yet, so this run can't test against the new base. Re-run this workflow."; exit 1
-              fi
-              SHA=$merge_sha
-              echo "Testing merge commit ${SHA:0:7} of ${PR_HEAD:0:7} into $live_base."
+              merge_into=$live_base
+              echo "The PR's base is now $live_base, not $BASE_REF as when this run started, so the checks run on ${PR_HEAD:0:7} merged into $live_base."
             fi
           fi
           if [ "$EVENT" = push ]; then
@@ -279,7 +257,7 @@ jobs:
               echo "::notice::Node checks skipped: $skip_reason"
             fi
           fi
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "merge_into=$merge_into" >> "$GITHUB_OUTPUT"
           echo "merged_pr=$merged_pr" >> "$GITHUB_OUTPUT"
           echo "run_node=$run_node" >> "$GITHUB_OUTPUT"
           echo "node_error=${node_error:-}" >> "$GITHUB_OUTPUT"
@@ -290,13 +268,29 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     steps:
       # Full history, so the range below has both ends. It also fetches every
-      # branch, which is why the scan must name a range (gantry#36). The gate's
-      # sha is github.sha, or the merge commit with a PR's new base on a re-run
-      # after a base change (gantry#134).
+      # branch, which is why the scan must name a range (gantry#36).
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.gate.outputs.sha }}
           fetch-depth: 0
+      # A re-run after a PR's base changed (gantry#134; the gate sets
+      # merge_into): merge the head into the new base, base first as GitHub
+      # does, so HEAD^1 is the base and HEAD^2 the head. The head is already
+      # here: it is the second parent of github.sha, the old merge commit.
+      - name: Merge into the new base
+        if: ${{ needs.gate.outputs.merge_into != '' }}
+        env:
+          BASE: ${{ needs.gate.outputs.merge_into }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then git fetch -q --no-tags --unshallow origin; fi
+          git fetch -q --no-tags origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+          git cat-file -e "$PR_HEAD^{commit}" || { echo "::error::the PR head ${PR_HEAD:0:7} isn't in this checkout"; exit 1; }
+          git checkout -q --detach "refs/remotes/origin/$BASE"
+          if ! git -c user.name=gantry -c user.email=gantry@users.noreply.github.com merge -q --no-ff --no-edit "$PR_HEAD"; then
+            echo "::error::${PR_HEAD:0:7} conflicts with its new base $BASE, so it can't be tested against it. Resolve the conflict and push."
+            exit 1
+          fi
+          echo "Testing $(git rev-parse --short HEAD), ${PR_HEAD:0:7} merged into $BASE at $(git rev-parse --short 'HEAD^1')."
       # Downloads the gitleaks build for this runner's OS and arch and checks it
       # against a pinned sha256 (gantry#67). A gitleaks already on PATH is used
       # instead, and the log says so: a self-hosted runner may install its own,
@@ -486,10 +480,29 @@ jobs:
           echo "::error::$NODE_ERROR"
           exit 1
 
-      # github.sha, or the merge commit with a PR's new base (see the gate).
+      # Full history only when the step below has to merge.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.gate.outputs.sha }}
+          fetch-depth: ${{ needs.gate.outputs.merge_into != '' && '0' || '1' }}
+      # A re-run after a PR's base changed (gantry#134; the gate sets
+      # merge_into): merge the head into the new base, base first as GitHub
+      # does, so HEAD^1 is the base and HEAD^2 the head. The head is already
+      # here: it is the second parent of github.sha, the old merge commit.
+      - name: Merge into the new base
+        if: ${{ needs.gate.outputs.merge_into != '' }}
+        env:
+          BASE: ${{ needs.gate.outputs.merge_into }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then git fetch -q --no-tags --unshallow origin; fi
+          git fetch -q --no-tags origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+          git cat-file -e "$PR_HEAD^{commit}" || { echo "::error::the PR head ${PR_HEAD:0:7} isn't in this checkout"; exit 1; }
+          git checkout -q --detach "refs/remotes/origin/$BASE"
+          if ! git -c user.name=gantry -c user.email=gantry@users.noreply.github.com merge -q --no-ff --no-edit "$PR_HEAD"; then
+            echo "::error::${PR_HEAD:0:7} conflicts with its new base $BASE, so it can't be tested against it. Resolve the conflict and push."
+            exit 1
+          fi
+          echo "Testing $(git rev-parse --short HEAD), ${PR_HEAD:0:7} merged into $BASE at $(git rev-parse --short 'HEAD^1')."
 
       # The checks below are bin/gantry-check, the script the pre-push hook in
       # hooks/node.yml also runs, so each has one definition (gantry#125).

@@ -98,9 +98,11 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   re-runs the head's latest `ci` run (cancelling it first if it is still going),
   so `gantry / ci-ok` blocks the merge until the new run finishes. The block
   starts when the re-run does, which took 7 to 14 seconds after the retarget in
-  gantry-sandbox; a merge in that gap still lands on the old green. A re-run replays the old event, so ci's gate checks the PR's live
-  base: when it differs, the gate waits for GitHub's merge commit with the new
-  base and the secret scan and node job test that. Its file list is read live,
+  gantry-sandbox; a merge in that gap still lands on the old green. A re-run
+  replays the old event, so ci's gate checks the PR's live base: when it
+  differs, the secret scan and node job merge the head into the new base and
+  test that. They don't use GitHub's merge commit, which stayed on the old base
+  for minutes after a retarget in gantry-sandbox. The gate's file list is read live,
   so a docs-only PR whose new base brings code runs node. A skipped
   `ci-retarget` run (any other edit) leaves ci's checks alone. The result stays
   in `ci`'s run: a check kept in `ci-retarget` would be reset by the next
