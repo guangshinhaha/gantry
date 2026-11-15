@@ -82,6 +82,16 @@ jobs:
           sh -n scripts/lint-hooks.sh
           for f in scripts/*.mjs bin/*.mjs; do node --check "$f"; done
 
+      # The gate tests run bin/gantry-gate-evidence through its #!/bin/sh
+      # shebang. macOS /bin/sh is bash, so this job is where they run under
+      # dash; fail if the runner's /bin/sh stops being dash.
+      - name: /bin/sh is dash
+        if: ${{ !cancelled() }}
+        run: |
+          sh_path=$(readlink -f /bin/sh)
+          echo "/bin/sh -> $sh_path"
+          case "$sh_path" in */dash) ;; *) exit 1 ;; esac
+
       - name: node --test
         if: ${{ !cancelled() }}
         run: node --test

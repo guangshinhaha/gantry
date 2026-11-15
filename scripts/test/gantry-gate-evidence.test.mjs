@@ -380,6 +380,71 @@ test("fails closed when neither <remote>/HEAD nor the remote names a default bra
     assert.equal(remoteSha(), null);
   }));
 
+test("fails closed when ls-remote names no default, even with a stale <remote>/HEAD set", () =>
+  withRepo(({ origin, work, commit, gate, remoteSha }) => {
+    // origin/HEAD still says main; the remote's real default is develop.
+    git(work, "push", "-q", "origin", "main:develop");
+    git(origin, "symbolic-ref", "HEAD", "refs/heads/develop");
+    git(work, "fetch", "-q", "origin");
+    // ls-remote fails, but a push still works.
+    git(work, "config", "remote.origin.uploadpack", "false");
+    commit("feat: rate", FIX);
+    const r = gate();
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /^FAIL: can't determine origin's default branch/);
+    assert.equal(remoteSha(), null);
+    git(work, "switch", "-q", "-c", "develop", "origin/develop");
+    commit("feat: rate on develop", { "app.js": "export const rate = 3;\n" });
+    const before = git(origin, "rev-parse", "refs/heads/develop");
+    for (const args of [[], ["--base", "origin/main"]]) {
+      const d = gate(args);
+      assert.equal(d.status, 1, `${args.join(" ")}: ${d.stdout}`);
+      assert.match(d.stdout, /^FAIL: can't determine origin's default branch/);
+    }
+    assert.equal(git(origin, "rev-parse", "refs/heads/develop"), before, "develop was pushed");
+  }));
+
+test("an untracked .gitignore can't hide files: only committed .gitignore files may", () => {
+  // Self-ignoring dir/.gitignore hides itself and dir/evil.test.js from git status.
+  withRepo(({ work, commit, gate, remoteSha }) => {
+    commit("feat: rate", FIX);
+    mkdirSync(join(work, "dir"));
+    writeFileSync(join(work, "dir/.gitignore"), "*\n");
+    writeFileSync(join(work, "dir/evil.test.js"), "x\n");
+    const r = gate();
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /^FAIL: untracked \.gitignore/);
+    assert.match(r.stdout, /dir\/\.gitignore/);
+    assert.equal(remoteSha(), null);
+  });
+  // The same, under a directory .git/info/exclude hides from git status.
+  withRepo(({ work, commit, gate, remoteSha }) => {
+    commit("feat: rate", FIX);
+    writeFileSync(join(work, ".git/info/exclude"), "dir/\n");
+    mkdirSync(join(work, "dir/sub"), { recursive: true });
+    writeFileSync(join(work, "dir/.gitignore"), "*\n");
+    writeFileSync(join(work, "dir/sub/evil.test.js"), "x\n");
+    const r = gate();
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /dir\/\.gitignore/);
+    assert.equal(remoteSha(), null);
+  });
+  // Committed .gitignore files, nested ones included, still hide files, and an
+  // untracked .gitignore inside a directory they ignore (.cache/) doesn't matter.
+  withRepo(({ work, commit, gate, remoteSha, head }) => {
+    commit("feat: rate", { ...FIX, ".gitignore": ".cache/\n", "a/b/.gitignore": "*.gen\n", "a/b/keep.js": "x\n" });
+    writeFileSync(join(work, "a/b/out.gen"), "x\n");
+    mkdirSync(join(work, "a/b/c"));
+    writeFileSync(join(work, "a/b/c/deep.gen"), "x\n");
+    mkdirSync(join(work, ".cache"));
+    writeFileSync(join(work, ".cache/.gitignore"), "*\n");
+    writeFileSync(join(work, ".cache/blob"), "x\n");
+    const r = gate();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(remoteSha(), head());
+  });
+});
+
 test("untracked files hidden by .git/info/exclude or a global excludesFile fail; .gitignore'd ones don't", () => {
   withRepo(({ work, commit, gate, remoteSha }) => {
     commit("feat: rate", FIX);

@@ -532,13 +532,15 @@ gantry-gate-evidence [--bug] [--base <ref>] [--remote <name>] [--force-with-leas
   `--base` (default the remote's default branch, else `<remote>/main` or
   `<remote>/master`). The remote's default is `refs/remotes/<remote>/HEAD` and
   what `git ls-remote --symref <remote> HEAD` names, so an unset or stale
-  `<remote>/HEAD` doesn't hide it; if neither names one, the gate fails.
+  `<remote>/HEAD` doesn't hide it; if ls-remote fails or names none, the gate
+  fails, even with `<remote>/HEAD` set.
   A merge counts as everything it brings in over its first parent, so merging
   the default branch in before the test commit fails `--bug`: rebase instead.
 - It fails without pushing on: a detached `HEAD`; a branch named `main`,
   `master`, the remote's default or the base's (whatever `--base` says);
-  uncommitted or untracked files (including ones hidden by `.git/info/exclude`
-  or a global `core.excludesFile`: only `.gitignore` may hide a file), or index
+  uncommitted or untracked files (including ones hidden by
+  `.git/info/exclude`, a global `core.excludesFile` or an untracked
+  `.gitignore`: only committed `.gitignore` files may hide a file), or index
   entries marked assume-unchanged or skip-worktree (the hook would test the
   working tree, not the commits; a sparse checkout fails here); an unknown
   remote default branch; no commits ahead of the base; or no executable
