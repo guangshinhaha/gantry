@@ -16,7 +16,12 @@ function fake({ pull = PULL, pulls = [], runs = [wr()], states = [], rerunFails 
   let reads = 0;
   const api = async (p) => {
     if (/\/pulls\//.test(p)) return reads++ === 0 ? pull : (pulls.shift() ?? pull);
-    if (/\/actions\/runs\?/.test(p)) return { workflow_runs: runs };
+    if (/\/actions\/runs\?/.test(p)) {
+      // Pages of 100, like GitHub: `page=N` returns runs[100(N-1) .. 100N).
+      calls.pages = (calls.pages ?? 0) + 1;
+      const page = Number(/[?&]page=(\d+)/.exec(p)?.[1] ?? 1);
+      return { total_count: runs.length, workflow_runs: runs.slice((page - 1) * 100, page * 100) };
+    }
     const id = Number(p.split("/").pop());
     return { ...runs.find((r) => r.id === id), status: states.shift() ?? "completed" };
   };
@@ -88,11 +93,22 @@ test("re-runs that keep failing fail the job", async () => {
   assert.match(r.reason, /Could not re-run run 1/);
 });
 
-test("no ci run at the head re-runs nothing (ci-ok is missing, so the merge already waits)", async () => {
+test("no ci run at the head fails loudly, so a base change can't pass unseen", async () => {
   const f = fake({ runs: [] });
   const r = await go(f);
-  assert.equal(r.status, "skip");
+  assert.equal(r.status, "fail");
+  assert.match(r.reason, /No \.github\/workflows\/ci\.yml run for head aaaaaaa/);
   assert.deepEqual(f.calls.rerun, []);
+});
+
+test("the ci run is found past the first page of runs", async () => {
+  // 150 runs of other workflows at the head come first, as the API lists newest first.
+  const other = Array.from({ length: 150 }, (_, i) => wr({ id: 1000 + i, run_number: 500 - i, path: ".github/workflows/mutation.yml" }));
+  const f = fake({ runs: [...other, wr({ id: 9, run_number: 3 })] });
+  const r = await go(f);
+  assert.equal(r.status, "rerun", r.reason);
+  assert.deepEqual(f.calls.rerun, [9]);
+  assert.equal(f.calls.pages, 2);
 });
 
 test("a closed or draft PR re-runs nothing", async () => {

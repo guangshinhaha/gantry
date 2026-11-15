@@ -54,6 +54,8 @@ case "$*" in
     echo "$*" >> "$RUNNER_TEMP/tree-calls"
     [ "$STUB_TREE" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }
     [ -n "$STUB_TREE_BODY" ] && { printf '%s' "$STUB_TREE_BODY"; exit 0; }
+    a="$*"; ref=\${a##*git/trees/}; ref=\${ref%%[?]*}
+    [ -f "$STUB_TREE.$ref" ] && { cat "$STUB_TREE.$ref"; exit 0; }
     cat "$STUB_TREE" ;;
   *) echo "stub gh: unexpected $*" >&2; exit 2 ;;
 esac
@@ -75,7 +77,7 @@ function runGate({
   root, tree = [], truncated = false, treeFails = false, treeBody = "", gitPaths = null, node = "true", codegen = "false",
   files = ["src/x.ts"], changed = files.length, event = "pull_request", compare = [], compareStatus = "ahead", merged = [],
   ref = "refs/heads/main", checks = { check_runs: [] }, checksBefore = "",
-  baseRef = "main", pull = {}, rootAt = {},
+  baseRef = "main", pull = {}, rootAt = {}, treeAt = {},
 }) {
   const entry = (f) => (typeof f === "string" ? { filename: f } : f);
   const dir = mkdtempSync(join(tmpdir(), "gantry-gate-"));
@@ -88,6 +90,10 @@ function runGate({
     treeFile,
     JSON.stringify({ truncated, tree: tree.map((path) => ({ path, type: path.endsWith("/") ? "tree" : "blob" })) }),
   );
+  // A different tree at a given ref: the stub serves tree.json.<ref> for it.
+  for (const [ref, paths] of Object.entries(treeAt)) {
+    writeFileSync(`${treeFile}.${ref}`, JSON.stringify({ truncated, tree: paths.map((path) => ({ path, type: "blob" })) }));
+  }
   const out = join(dir, "out"), summary = join(dir, "summary");
   writeFileSync(out, ""); writeFileSync(summary, "");
   let status = 0, log = "";
@@ -519,4 +525,17 @@ test("gantry#134: neither has a root package.json: the new base's tree is search
   assert.equal(r.outputs.run_node, "false");
   assert.match(r.outputs.node_error, /found at: app\/package\.json/);
   assert.match(readFileSync(join(r.dir, "tree-calls"), "utf8"), /git\/trees\/b2\?/);
+});
+
+test("gantry#134: a nested package.json the head adds fails node on a retarget re-run too", () => {
+  // No root package.json anywhere. The PR adds app/package.json: its first run
+  // fails node, and the re-run must not go green by scanning only the new base.
+  const r = runGate({ ...retarget, root: 404, treeAt: { b2: ["README.md"], h1: ["README.md", "app/package.json"] } });
+  assert.equal(r.outputs.run_node, "false");
+  assert.match(r.outputs.node_error, /found at: app\/package\.json/);
+});
+
+test("gantry#134: a nested package.json only on the new base also fails node", () => {
+  const r = runGate({ ...retarget, root: 404, treeAt: { b2: ["lib/package.json"], h1: ["README.md"] } });
+  assert.match(r.outputs.node_error, /found at: lib\/package\.json/);
 });

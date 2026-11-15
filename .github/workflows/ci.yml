@@ -225,30 +225,35 @@ jobs:
               # can't run, so fail node instead of skipping it (gantry#66).
               # Also checks the body is a tree: the step has no pipefail, so a
               # jq error below would otherwise read as "no package.json".
-              tree_ref=${pkg_refs%% *}
-              if ! tree=$(gh api "repos/$REPO/git/trees/$tree_ref?recursive=1") \
-                || ! printf '%s' "$tree" | jq -e '.tree | type == "array"' >/dev/null 2>&1; then
-                echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
-              fi
-              if [ "$(printf '%s' "$tree" | jq -r .truncated)" = true ]; then
-                # Too many files for the API. A shallow fetch without file
-                # contents lists every path in a few seconds.
-                dir="$RUNNER_TEMP/gantry-tree"
-                if ! { git init -q "$dir" \
-                  && git -C "$dir" fetch -q --depth 1 --filter=blob:none \
-                    "https://x-access-token:$GH_TOKEN@${GITHUB_SERVER_URL#https://}/$REPO" "$tree_ref" \
-                  && git -C "$dir" ls-tree -r --name-only FETCH_HEAD > "$dir.paths"; }; then
+              # Every ref in pkg_refs: on a retarget re-run that is the new base
+              # and the head, and either can bring a nested package.json.
+              found=""
+              for tree_ref in $pkg_refs; do
+                if ! tree=$(gh api "repos/$REPO/git/trees/$tree_ref?recursive=1") \
+                  || ! printf '%s' "$tree" | jq -e '.tree | type == "array"' >/dev/null 2>&1; then
                   echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
                 fi
-                # git quotes and escapes any name with a quote, newline or
-                # non-ASCII byte, so each line is one ASCII name and a newline
-                # can't fake a match. LC_ALL=C -a: never "binary file matches".
-                found=$(LC_ALL=C grep -a -E '(^"?|/)package\.json"?$' "$dir.paths" || true)
-              else
-                found=$(printf '%s' "$tree" \
-                  | jq -r '.tree[] | select(.type == "blob") | .path | select(. == "package.json" or endswith("/package.json"))')
-              fi
-              nested=$(printf '%s\n' "$found" | head -n 5 | paste -sd ' ' -)
+                if [ "$(printf '%s' "$tree" | jq -r .truncated)" = true ]; then
+                  # Too many files for the API. A shallow fetch without file
+                  # contents lists every path in a few seconds.
+                  dir="$RUNNER_TEMP/gantry-tree-$tree_ref"
+                  if ! { git init -q "$dir" \
+                    && git -C "$dir" fetch -q --depth 1 --filter=blob:none \
+                      "https://x-access-token:$GH_TOKEN@${GITHUB_SERVER_URL#https://}/$REPO" "$tree_ref" \
+                    && git -C "$dir" ls-tree -r --name-only FETCH_HEAD > "$dir.paths"; }; then
+                    echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
+                  fi
+                  # git quotes and escapes any name with a quote, newline or
+                  # non-ASCII byte, so each line is one ASCII name and a newline
+                  # can't fake a match. LC_ALL=C -a: never "binary file matches".
+                  ref_found=$(LC_ALL=C grep -a -E '(^"?|/)package\.json"?$' "$dir.paths" || true)
+                else
+                  ref_found=$(printf '%s' "$tree" \
+                    | jq -r '.tree[] | select(.type == "blob") | .path | select(. == "package.json" or endswith("/package.json"))')
+                fi
+                found=$(printf '%s\n%s' "$found" "$ref_found")
+              done
+              nested=$(printf '%s\n' "$found" | awk 'NF && !seen[$0]++' | head -n 5 | paste -sd ' ' -)
               # Asks jq, not the flattened list, so a name with a newline in it
               # can't fake a line.
               if [ -n "$(printf '%s\n' "$entries" | jq -r 'select(.f == "package.json" or .p == "package.json") | "y"')" ]; then

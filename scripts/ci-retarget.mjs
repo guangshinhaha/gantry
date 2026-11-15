@@ -37,10 +37,16 @@ export async function run({ repo, pr, path, api, cancel, rerun, sleep, waitMs = 
   if (pull.state !== "open") return { status: "skip", reason: `PR #${pr} is ${pull.state}: nothing to re-run.` };
   if (pull.draft) return { status: "skip", reason: `PR #${pr} is a draft: ci runs when it is marked ready.` };
   const headSha = pull.head.sha;
-  const runs = (await api(`repos/${repo}/actions/runs?event=pull_request&head_sha=${headSha}&per_page=100`)).workflow_runs;
+  // Every workflow's runs at the head share these pages, so read them all.
+  const runs = [];
+  for (let page = 1; ; page++) {
+    const batch = (await api(`repos/${repo}/actions/runs?event=pull_request&head_sha=${headSha}&per_page=100&page=${page}`)).workflow_runs ?? [];
+    runs.push(...batch);
+    if (batch.length < 100) break;
+  }
   let target = latestRun(runs, { headSha, path, pr });
-  // No ci run at this head means no ci-ok either, so the required check already waits.
-  if (!target) return { status: "skip", reason: `No ${path} run for head ${headSha.slice(0, 7)}: nothing to re-run. Push to start one.` };
+  // Fail rather than pass: a green job here would hide that nothing tested the new base.
+  if (!target) return { status: "fail", reason: `No ${path} run for head ${headSha.slice(0, 7)} of PR #${pr}, so nothing can test it against its new base ${pull.base.ref}. Push to start one, or check the ci-workflow input.` };
 
   let waited = 0, lastError;
   if (target.status !== "completed") {
