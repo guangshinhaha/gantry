@@ -43,12 +43,15 @@ case "$*" in
      [ "$STUB_CHECKS" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_CHECKS" | jq -r "$(filter "$@")" ;;
   *"/commits/"*"/check-runs"*) [ "$STUB_CHECKS" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_CHECKS" | jq -r "$(filter "$@")" ;;
   *"/contents/package.json"*)
-    case "$STUB_ROOT" in
+    a="$*"; ref=\${a##*ref=}; ref=\${ref%% *}
+    at=$(printf '%s' "\${STUB_ROOT_AT:-"{}"}" | jq -r --arg r "$ref" '.[$r] // empty')
+    case "\${at:-$STUB_ROOT}" in
       200) exit 0 ;;
       404) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
       *) echo "gh: Server Error (HTTP 500)" >&2; exit 1 ;;
     esac ;;
   *"/git/trees/"*"recursive=1"*)
+    echo "$*" >> "$RUNNER_TEMP/tree-calls"
     [ "$STUB_TREE" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }
     [ -n "$STUB_TREE_BODY" ] && { printf '%s' "$STUB_TREE_BODY"; exit 0; }
     cat "$STUB_TREE" ;;
@@ -72,7 +75,7 @@ function runGate({
   root, tree = [], truncated = false, treeFails = false, treeBody = "", gitPaths = null, node = "true", codegen = "false",
   files = ["src/x.ts"], changed = files.length, event = "pull_request", compare = [], compareStatus = "ahead", merged = [],
   ref = "refs/heads/main", checks = { check_runs: [] }, checksBefore = "",
-  baseRef = "main", pull = {},
+  baseRef = "main", pull = {}, rootAt = {},
 }) {
   const entry = (f) => (typeof f === "string" ? { filename: f } : f);
   const dir = mkdtempSync(join(tmpdir(), "gantry-gate-"));
@@ -98,7 +101,7 @@ function runGate({
         STUB_FILES: JSON.stringify(files.map(entry)), STUB_PR: JSON.stringify({ changed_files: changed, base: { ref: "main" }, head: { sha: "h1" }, ...pull }),
         STUB_COMPARE: compare === "fail" ? "fail" : JSON.stringify({ status: compareStatus, files: compare.map(entry) }), STUB_MERGED: merged === "fail" ? "fail" : JSON.stringify(merged),
         PUSHED_REF: ref, STUB_CHECKS_BEFORE: checksBefore === "fail" ? "fail" : checksBefore ? JSON.stringify(checksBefore) : "", STUB_CHECKS: checks === "fail" ? "fail" : JSON.stringify(checks),
-        NODE_INPUT: node, HAS_CODEGEN: codegen, STUB_ROOT: String(root), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
+        NODE_INPUT: node, HAS_CODEGEN: codegen, STUB_ROOT: String(root), STUB_ROOT_AT: JSON.stringify(rootAt), STUB_TREE: treeFails ? "fail" : treeFile, STUB_TREE_BODY: treeBody, STUB_GIT_PATHS: gitPaths ?? "fail",
         LANG: "C.UTF-8", RUNNER_TEMP: dir, GITHUB_SERVER_URL: "https://github.com", GH_TOKEN: "t",
       },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
@@ -111,7 +114,7 @@ function runGate({
   const text = readFileSync(out, "utf8");
   for (const m of text.matchAll(/^(\w+)<<(\S+)\n([\s\S]*?)\n\2$/gm)) outputs[m[1]] = m[3];
   for (const m of text.matchAll(/^(\w+)=(.*)$/gm)) outputs[m[1]] = m[2];
-  return { status, log, outputs, summary: readFileSync(summary, "utf8") };
+  return { status, log, outputs, dir, summary: readFileSync(summary, "utf8") };
 }
 
 test("root package.json: node runs", () => {
@@ -493,4 +496,27 @@ test("gantry#134: a retarget that makes a docs-only PR include code runs node", 
   const r = runGate({ root: 200, baseRef: "feature", files: ["docs/a.md", "src/quota.ts"] });
   assert.equal(r.status, 0, r.log);
   assert.equal(r.outputs.run_node, "true");
+});
+
+// On such a re-run github.sha is the old merge, so package.json is looked up at
+// the new base and the head: the merge has a root package.json only if one does.
+const retarget = { baseRef: "feature", pull: { base: { ref: "main", sha: "b2" } }, files: ["src/x.ts"] };
+
+test("gantry#134: a new base with a root package.json runs node, though the old merge had none", () => {
+  const r = runGate({ ...retarget, root: 404, rootAt: { b2: 200 } });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.run_node, "true");
+});
+
+test("gantry#134: a head with a root package.json runs node, though the new base has none", () => {
+  const r = runGate({ ...retarget, root: 404, rootAt: { h1: 200 } });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.run_node, "true");
+});
+
+test("gantry#134: neither has a root package.json: the new base's tree is searched for a nested one", () => {
+  const r = runGate({ ...retarget, root: 200, rootAt: { b2: 404, h1: 404 }, tree: ["app/package.json"] });
+  assert.equal(r.outputs.run_node, "false");
+  assert.match(r.outputs.node_error, /found at: app\/package\.json/);
+  assert.match(readFileSync(join(r.dir, "tree-calls"), "utf8"), /git\/trees\/b2\?/);
 });

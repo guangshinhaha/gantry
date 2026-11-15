@@ -97,6 +97,10 @@ jobs:
           # retarget. The file list below is read live, so it is already
           # against the current base.
           merge_into=""
+          # Where to look for package.json below: github.sha, or on such a
+          # re-run the new base and the head, since a merge has a root
+          # package.json only if one of them does.
+          pkg_refs=$SHA
           if [ "$EVENT" = pull_request ]; then
             pull=$(gh api "repos/$REPO/pulls/$PR") || { echo "::error::could not read PR #$PR"; exit 1; }
             live_base=$(printf '%s' "$pull" | jq -r .base.ref)
@@ -105,6 +109,7 @@ jobs:
                 echo "::error::PR #$PR has moved on from ${PR_HEAD:0:7}, so this run's result can't stand for it. The run for its new head covers it."; exit 1
               fi
               merge_into=$live_base
+              pkg_refs="$(printf '%s' "$pull" | jq -r .base.sha) $PR_HEAD"
               echo "The PR's base is now $live_base, not $BASE_REF as when this run started, so the checks run on ${PR_HEAD:0:7} merged into $live_base."
             fi
           fi
@@ -194,24 +199,34 @@ jobs:
               fi
             fi
           fi
+          # True if any of the refs has a root package.json. Only a missing file
+          # counts as none. Any other error, such as an API outage, fails this
+          # job so ci-ok can't go green without the checks.
+          root_pkg() {
+            local ref err
+            for ref in $1; do
+              if err=$(gh api "repos/$REPO/contents/package.json?ref=$ref" --silent 2>&1); then return 0; fi
+              case "$err" in
+                *"Not Found (HTTP 404)"*) ;;
+                *) echo "::error::could not check for package.json: $err"; exit 1 ;;
+              esac
+            done
+            return 1
+          }
           run_node=false
           if [ "$merged_pr" = false ] && [ "$docs_only" = false ]; then
             skip_reason=""
             node_error=""
             if [ "$NODE_INPUT" != true ]; then
               skip_reason="the caller set node: false"
-            elif ! err=$(gh api "repos/$REPO/contents/package.json?ref=$SHA" --silent 2>&1); then
-              # Only a missing file skips. Any other error, such as an API outage,
-              # fails this job so ci-ok can't go green without the checks.
-              case "$err" in
-                *"Not Found (HTTP 404)"*) skip_reason="no package.json in this repo" ;;
-                *) echo "::error::could not check for package.json: $err"; exit 1 ;;
-              esac
+            elif ! root_pkg "$pkg_refs"; then
+              skip_reason="no package.json in this repo"
               # No root package.json. A nested one means a Node project the job
               # can't run, so fail node instead of skipping it (gantry#66).
               # Also checks the body is a tree: the step has no pipefail, so a
               # jq error below would otherwise read as "no package.json".
-              if ! tree=$(gh api "repos/$REPO/git/trees/$SHA?recursive=1") \
+              tree_ref=${pkg_refs%% *}
+              if ! tree=$(gh api "repos/$REPO/git/trees/$tree_ref?recursive=1") \
                 || ! printf '%s' "$tree" | jq -e '.tree | type == "array"' >/dev/null 2>&1; then
                 echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
               fi
@@ -221,7 +236,7 @@ jobs:
                 dir="$RUNNER_TEMP/gantry-tree"
                 if ! { git init -q "$dir" \
                   && git -C "$dir" fetch -q --depth 1 --filter=blob:none \
-                    "https://x-access-token:$GH_TOKEN@${GITHUB_SERVER_URL#https://}/$REPO" "$SHA" \
+                    "https://x-access-token:$GH_TOKEN@${GITHUB_SERVER_URL#https://}/$REPO" "$tree_ref" \
                   && git -C "$dir" ls-tree -r --name-only FETCH_HEAD > "$dir.paths"; }; then
                   echo "::error::could not list the repo's files to look for a nested package.json"; exit 1
                 fi
