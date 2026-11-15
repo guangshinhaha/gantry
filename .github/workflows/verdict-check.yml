@@ -94,16 +94,20 @@ jobs:
 
   # A comment run can't report the check itself: it runs on the default branch,
   # and the required check sits on the PR's head. It re-runs the PR's run instead.
-  # The `verdict` filter skips ordinary comments; an edit is matched on the old
-  # body too, so editing a verdict into prose re-runs. The association test here
-  # only keeps strangers' comments off a runner (a substring match, so loose); the
-  # script re-checks it exactly. The comment body never reaches a shell. One
-  # re-run per PR at a time: a later comment waits, then re-reads every comment.
+  # Only a comment that holds the verdict marker `"head_sha"` (the JSON key every
+  # verdict carries) on an open PR starts a runner (gantry#125): agents comment
+  # far more than people, and prose that only mentions a verdict changes nothing.
+  # An edit is matched on the old body too, so editing a verdict into prose
+  # re-runs. The association test here only keeps strangers' comments off a
+  # runner (a substring match, so loose); the script re-checks it exactly. The
+  # comment body never reaches a shell. One re-run per PR at a time: a later
+  # comment waits, then re-reads every comment.
   rerun:
     if: >-
       ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
       contains(inputs.trusted-associations, github.event.comment.author_association) &&
-      (contains(github.event.comment.body, 'verdict') || contains(github.event.changes.body.from, 'verdict')) }}
+      (contains(github.event.comment.body, '"head_sha"') || contains(github.event.changes.body.from, '"head_sha"')) }}
     concurrency:
       group: verdict-rerun-${{ github.repository }}-${{ github.event.issue.number }}
       cancel-in-progress: false
