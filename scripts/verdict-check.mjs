@@ -7,14 +7,14 @@
 //     node scripts/verdict-check.mjs
 //   node scripts/verdict-check.mjs --pr 123 [--repo owner/name] [--label <name> | --no-label] [--trusted A,B]
 //
-// Flags override the env. --no-label checks the PR whether or not it carries
+// With any flag the env is ignored: flags or the env, never a mix. --no-label checks the PR whether or not it carries
 // the label. Without a repo, uses the current directory's (`gh repo view`).
 // Exit 0: pass, or skip (no label); 1: fail; 2: bad arguments or gh failed.
 //
 // A verdict is a JSON object in a PR comment, bare or in a code fence:
 //   {"pr": 12, "head_sha": "<40 hex>", "verdict": "PASS|PASS+NOTES|FAIL", "evidence": [...]}
 import { execFileSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export const VERDICTS = new Set(["PASS", "PASS+NOTES", "FAIL"]);
@@ -90,14 +90,22 @@ export function evaluate({ prNumber, headSha, labels, label = DEFAULT_LABEL, com
 
 const gh = (path) => JSON.parse(execFileSync("gh", ["api", "--paginate", "--slurp", path], { encoding: "utf8" })).flat();
 
-/** Options from flags, falling back to the env. Throws Error(message) on a bad argument. */
+/** Options from flags, or from the env when there are none. Throws Error(message) on a bad argument. */
 export function parseArgs(argv, env = {}) {
   const o = {
-    repo: env.REPO || "",
-    pr: env.PR || "",
-    label: env.LABEL || DEFAULT_LABEL,
-    trusted: env.TRUSTED || DEFAULT_TRUSTED.join(","),
+    repo: "",
+    pr: "",
+    label: DEFAULT_LABEL,
+    trusted: DEFAULT_TRUSTED.join(","),
   };
+  // The env is the workflow's interface, read only when no flag is given, so a
+  // stray REPO, PR or LABEL in a shell can't redirect a command-line check.
+  if (!argv.length) {
+    o.repo = env.REPO || "";
+    o.pr = env.PR || "";
+    o.label = env.LABEL || DEFAULT_LABEL;
+    o.trusted = env.TRUSTED || o.trusted;
+  }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const val = () => {
@@ -154,4 +162,7 @@ function main() {
   return r.status === "fail" ? 1 : 0;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) process.exit(main());
+// Run as a script, whatever symlinks are in the path it was started by
+// (import.meta.url is already resolved; argv[1] is not).
+const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+if (process.argv[1] && real(process.argv[1]) === real(fileURLToPath(import.meta.url))) process.exit(main());

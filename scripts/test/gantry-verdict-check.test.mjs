@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +26,9 @@ const comment = (verdict, head_sha = HEAD, { at, assoc = "OWNER" } = {}) => {
 
 // Runs the command with a fake gh that serves `pull` and `comments` (as one
 // --slurp page) and logs every call. `failGh` makes every gh call exit 1.
-function check(args, { pull = { head: { sha: HEAD }, labels: [] }, comments = [], failGh = false, env = {} } = {}) {
+// `via`: "repo-link" runs it through a symlink to the gantry checkout,
+// "bin-link" through a symlink to the command itself (as on PATH).
+function check(args, { pull = { head: { sha: HEAD }, labels: [] }, comments = [], failGh = false, env = {}, via } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "gantry-verdict-check-test-"));
   try {
     writeFileSync(join(dir, "pull.json"), JSON.stringify(pull));
@@ -45,7 +47,15 @@ esac
 `,
     );
     chmodSync(join(dir, "gh"), 0o755);
-    const r = spawnSync(CMD, args, {
+    let cmd = CMD;
+    if (via === "repo-link") {
+      symlinkSync(join(dirname(CMD), ".."), join(dir, "gantry"));
+      cmd = join(dir, "gantry/bin/gantry-verdict-check");
+    } else if (via === "bin-link") {
+      symlinkSync(CMD, join(dir, "gantry-verdict-check"));
+      cmd = join(dir, "gantry-verdict-check");
+    }
+    const r = spawnSync(cmd, args, {
       encoding: "utf8",
       env: { PATH: `${dir}:${process.env.PATH}`, HOME: process.env.HOME, ...env },
     });
@@ -132,13 +142,52 @@ test("inside Actions a FAIL is an error annotation, as in the workflow", () => {
   assert.match(r.stdout, /^::error::No verdict for head/);
 });
 
-test("parseArgs: flags override the workflow's env", () => {
-  const env = { REPO: "e/r", PR: "3", LABEL: "risk:high", TRUSTED: "OWNER" };
-  assert.deepEqual(parseArgs([], env), { repo: "e/r", pr: 3, label: "risk:high", trusted: ["OWNER"] });
+test("parseArgs: the workflow's env only when there are no flags", () => {
+  const env = { REPO: "e/r", PR: "3", LABEL: "bug", TRUSTED: "OWNER" };
+  assert.deepEqual(parseArgs([], env), { repo: "e/r", pr: 3, label: "bug", trusted: ["OWNER"] });
   assert.deepEqual(parseArgs(["--repo", "o/r", "--pr", "7", "--no-label", "--trusted", "OWNER, MEMBER"], env), {
     repo: "o/r", pr: 7, label: null, trusted: ["OWNER", "MEMBER"],
   });
-  assert.equal(parseArgs(["--pr", "7"], { LABEL: "" }).label, "risk:high");
+  assert.deepEqual(parseArgs(["--pr", "7"], env), {
+    repo: "", pr: 7, label: "risk:high", trusted: ["OWNER", "MEMBER", "COLLABORATOR"],
+  });
+  assert.equal(parseArgs([], { PR: "7", LABEL: "" }).label, "risk:high");
+});
+
+test("the command ignores REPO, PR, LABEL and TRUSTED in its env", () => {
+  const env = { REPO: "other/repo", PR: "7", LABEL: "bug", TRUSTED: "NONE" };
+  const r = check(["--pr", "7", "--no-label"], { comments: [comment("PASS", HEAD, { assoc: "NONE" })], env });
+  assert.equal(r.status, 1, "NONE is not trusted by default");
+  assert.equal(r.calls[0], "repo view --json nameWithOwner --jq .nameWithOwner");
+  assert.ok(r.calls.includes("api repos/o/r/pulls/7"), r.calls.join("\n"));
+  const noPr = check([], { env, comments: [comment("PASS")] });
+  assert.equal(noPr.status, 2, "PR in the env is not --pr");
+  assert.deepEqual(noPr.calls, []);
+  const labelled = { head: { sha: HEAD }, labels: [{ name: "risk:high" }] };
+  assert.equal(check(["--pr", "7"], { pull: labelled, env }).status, 1, "LABEL=bug must not turn risk:high into a skip");
+});
+
+test("through a symlinked checkout or a symlink on PATH it still runs the check", () => {
+  for (const via of ["repo-link", "bin-link"]) {
+    const fail = check(ALL, { via, comments: [comment("PASS", OLD)] });
+    assert.equal(fail.status, 1, `${via}: ${fail.stdout}${fail.stderr}`);
+    assert.match(fail.stdout, /^FAIL:/);
+    const bad = check(["--pr", "abc"], { via });
+    assert.equal(bad.status, 2, `${via}: ${bad.stdout}${bad.stderr}`);
+    assert.equal(check(ALL, { via, comments: [comment("PASS")] }).status, 0, via);
+  }
+});
+
+test("node on the script through a symlinked path still runs main", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gantry-verdict-check-link-"));
+  try {
+    symlinkSync(join(dirname(CMD), ".."), join(dir, "gantry"));
+    const r = spawnSync("node", [join(dir, "gantry/scripts/verdict-check.mjs"), "--pr", "abc"], { encoding: "utf8" });
+    assert.equal(r.status, 2, r.stdout + r.stderr);
+    assert.match(r.stderr, /--pr <number> is required/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("evaluate with label null never skips", () => {

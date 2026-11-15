@@ -8,8 +8,25 @@
 # --label (default risk:high): a PR without it skips (exit 0). --no-label checks
 # the PR whatever its labels. --trusted: author_association values whose
 # comments count (default OWNER,MEMBER,COLLABORATOR). Without --repo, uses the
-# current directory's repo.
+# current directory's repo. The workflow's env (REPO, PR, LABEL, TRUSTED) is
+# ignored here.
 #
 # Prints one line, `PASS: ...`, `SKIP: ...` or `FAIL: <reason>`.
-# Exit 0: pass or skip; 1: fail; 2: bad arguments or gh failed.
-exec node "$(cd "$(dirname "$0")/.." && pwd)/scripts/verdict-check.mjs" "$@"
+# Exit 0: pass or skip; 1: fail; 2: bad arguments, gh failed, or the script is missing.
+
+# Follow symlinks to this file, so a link on PATH still finds scripts/.
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case "$link" in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+  esac
+done
+script="$(cd "$(dirname "$self")/.." && pwd -P)/scripts/verdict-check.mjs"
+[ -f "$script" ] || { echo "gantry-verdict-check: missing $script" >&2; exit 2; }
+
+unset REPO PR LABEL TRUSTED
+# With no arguments the script reads the workflow's env; here that is an error.
+[ $# -gt 0 ] || { echo "gantry-verdict-check: --pr <number> is required" >&2; exit 2; }
+exec node "$script" "$@"

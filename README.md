@@ -544,7 +544,9 @@ gantry-verdict-check --pr <n> [--repo owner/name] [--label <name> | --no-label] 
 
 - `--no-label` checks the PR whatever its labels; with `--label` (default
   `risk:high`) an unlabelled PR skips, as in the workflow.
-- Without `--repo`, it uses the current directory's repo.
+- Without `--repo`, it uses the current directory's repo. The workflow's env
+  (`REPO`, `PR`, `LABEL`, `TRUSTED`) is ignored, so a stray variable can't point
+  it at another PR. It works through a symlinked checkout or a symlink on `PATH`.
 - Prints `PASS: ...`, `SKIP: ...` or `FAIL: <reason>`. Exit 0 pass or skip, 1
   fail, 2 bad arguments or `gh` failed (never a pass).
 
