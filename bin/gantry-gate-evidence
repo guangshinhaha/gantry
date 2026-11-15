@@ -14,11 +14,11 @@
 #    included. It never parses CLAUDE.md: the hook decides which checks run.
 #
 # <remote>'s default branch is refs/remotes/<remote>/HEAD and what
-# `git ls-remote --symref <remote> HEAD` names; both are guarded. If neither
-# names one, the gate fails closed.
-# --base: the branch's base, default <remote>'s default branch, else
-# <remote>/main or <remote>/master. Commits are those on HEAD's first-parent
-# line and not on the base.
+# `git ls-remote --symref <remote> HEAD` names; both are guarded. If ls-remote
+# fails or names none, the gate fails closed, even with the local ref set.
+# --base: the branch's base, default <remote>'s default branch (as ls-remote
+# names it, else the local ref), else <remote>/main or <remote>/master. Commits
+# are those on HEAD's first-parent line and not on the base.
 # --remote: default origin.
 # --force-with-lease: push with git's lease, for a branch whose history was
 # rewritten (a rebase) since its last push.
@@ -26,9 +26,10 @@
 # Fails without pushing on: a detached HEAD; a branch named main, master,
 # <remote>'s default or the base's; uncommitted or untracked files, or index
 # entries marked assume-unchanged or skip-worktree, or untracked files hidden by
-# .git/info/exclude or core.excludesFile (the hook would test the working tree,
-# not the commits; only .gitignore may hide a file); <remote>'s default branch
-# unknown; no commits ahead of the base; no pre-push hook.
+# .git/info/exclude, core.excludesFile or an untracked .gitignore (the hook
+# would test the working tree, not the commits; only committed .gitignore files
+# may hide a file); <remote>'s default branch unknown; no commits ahead of the
+# base; no pre-push hook.
 # Fails after pushing if the hook couldn't find lefthook (it exits 0 then).
 # The caller's LEFTHOOK* variables and command-line git config are dropped.
 #
@@ -79,10 +80,11 @@ LOCAL_DEFAULT=$(git symbolic-ref --short -q "refs/remotes/$REMOTE/HEAD" 2>/dev/n
 LOCAL_DEFAULT=${LOCAL_DEFAULT#"$REMOTE"/}
 REMOTE_DEFAULT=$(git ls-remote --symref "$REMOTE" HEAD 2>/dev/null |
   awk '$1 == "ref:" && $3 == "HEAD" { sub(/^refs\/heads\//, "", $2); print $2; exit }') || REMOTE_DEFAULT=""
-[ -n "$LOCAL_DEFAULT$REMOTE_DEFAULT" ] ||
-  fail "can't determine $REMOTE's default branch: refs/remotes/$REMOTE/HEAD is unset and \`git ls-remote --symref $REMOTE HEAD\` names none, so the gate can't tell whether $BRANCH is it"
+# The remote must answer: a local ref alone may be stale, so it's never enough.
+[ -n "$REMOTE_DEFAULT" ] ||
+  fail "can't determine $REMOTE's default branch: \`git ls-remote --symref $REMOTE HEAD\` failed or named none, so the gate can't tell whether $BRANCH is it (refs/remotes/$REMOTE/HEAD alone may be stale)"
 if [ -z "$BASE" ]; then
-  for b in "$LOCAL_DEFAULT" "$REMOTE_DEFAULT" main master; do
+  for b in "$REMOTE_DEFAULT" "$LOCAL_DEFAULT" main master; do
     [ -n "$b" ] && git rev-parse -q --verify "refs/remotes/$REMOTE/$b" >/dev/null && { BASE=$REMOTE/$b; break; }
   done
   [ -n "$BASE" ] || fail "can't find $REMOTE's default branch; pass --base <ref>"
@@ -98,8 +100,17 @@ done
 dirty=$(git -c status.showUntrackedFiles=all -c core.fsmonitor=false \
   status --porcelain --untracked-files=all --ignore-submodules=none) || fail "git status failed"
 [ -z "$dirty" ] || fail "uncommitted or untracked files; the pre-push hook would test them, not the commits" "$dirty"
+# Only committed .gitignore files may hide an untracked file. An untracked
+# .gitignore that git status doesn't show is ignored, by itself (dir/.gitignore
+# holding `*`) or another, and may hide more. List every ignored .gitignore
+# outside a directory the .gitignore files ignore: one inside such a directory
+# can't hide anything git would otherwise see.
+gitignores=$(git -c core.fsmonitor=false ls-files --others --ignored --directory \
+  --exclude-per-directory=.gitignore) || fail "git ls-files failed"
+gitignores=$(printf '%s\n' "$gitignores" | grep -E '(^|/)\.gitignore"?$') || gitignores=""
+[ -z "$gitignores" ] || fail "untracked .gitignore files, which may hide untracked files from git status; the pre-push hook would test them, not the commits. Commit or delete them" "$gitignores"
 # git status hides untracked files matched by .git/info/exclude or
-# core.excludesFile; only the repo's own .gitignore files may hide one.
+# core.excludesFile; only the repo's own committed .gitignore files may hide one.
 untracked=$(git -c core.fsmonitor=false ls-files --others --exclude-per-directory=.gitignore) ||
   fail "git ls-files failed"
 [ -z "$untracked" ] || fail "untracked files, hidden from git status by .git/info/exclude or core.excludesFile; the pre-push hook would test them, not the commits. Commit, delete or .gitignore them" "$untracked"
