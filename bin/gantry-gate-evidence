@@ -4,22 +4,27 @@
 #
 #   gantry-gate-evidence [--bug] [--base <ref>] [--remote <name>] [--force-with-lease]
 #
-# 1. --bug only: the branch needs a commit that changes only tests before its
-#    first commit that changes anything else (the fix). Markdown-only commits
-#    count neither way. Checked first, so a failing branch is never pushed.
+# 1. --bug only: the branch needs a commit that adds or changes tests, and
+#    nothing else, before its first commit that changes anything else (the fix).
+#    Markdown-only commits and test deletions count neither way. A merge counts
+#    as everything it brings in over its first parent. Checked first, so a
+#    failing branch is never pushed.
 # 2. Pushes the branch, so the repo's pre-push hook (lefthook, running gantry's
 #    checks) runs. A refused push fails the gate with git's output, hook output
 #    included. It never parses CLAUDE.md: the hook decides which checks run.
 #
 # --base: the branch's base, default <remote>/HEAD, else <remote>/main or
-# <remote>/master. Commits are those on HEAD and not on the base.
+# <remote>/master. Commits are those on HEAD's first-parent line and not on the base.
 # --remote: default origin.
 # --force-with-lease: push with git's lease, for a branch whose history was
 # rewritten (a rebase) since its last push.
 #
-# Fails without pushing on: a detached HEAD, the base's own branch, uncommitted
-# or untracked files (the hook would test the working tree, not the commits),
-# no commits ahead of the base, or no pre-push hook installed.
+# Fails without pushing on: a detached HEAD; a branch named main, master,
+# <remote>'s default or the base's; uncommitted or untracked files, or index
+# entries marked assume-unchanged or skip-worktree (the hook would test the
+# working tree, not the commits); no commits ahead of the base; no pre-push hook.
+# Fails after pushing if the hook couldn't find lefthook (it exits 0 then).
+# The caller's LEFTHOOK* variables and command-line git config are dropped.
 #
 # Prints `PASS: ...` or `FAIL: <reason>`, then any git output.
 # Exit 0: pass; 1: fail; 2: bad arguments.
@@ -27,6 +32,7 @@ set -u
 
 NL='
 '
+TAB=$(printf '\t')
 BUG=0; BASE=""; REMOTE=origin; LEASE=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -50,11 +56,19 @@ fail() {
   exit 1
 }
 
+# The caller's env must not choose which checks run: every LEFTHOOK* variable
+# (LEFTHOOK=0, LEFTHOOK_BIN, LEFTHOOK_CONFIG, LEFTHOOK_EXCLUDE, ...) and git
+# config passed through the env (`git -c`, GIT_CONFIG_COUNT) are dropped.
+for v in $(env | sed -n 's/^\(LEFTHOOK[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+unset GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT
+
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "not inside a git work tree"
 BRANCH=$(git symbolic-ref --short -q HEAD) || fail "HEAD is detached; check out the work branch"
 
+DEFAULT=$(git symbolic-ref --short -q "refs/remotes/$REMOTE/HEAD" 2>/dev/null) || DEFAULT=""
 if [ -z "$BASE" ]; then
-  BASE=$(git symbolic-ref --short -q "refs/remotes/$REMOTE/HEAD" 2>/dev/null) || BASE=""
+  BASE=$DEFAULT
   for b in "$REMOTE/main" "$REMOTE/master"; do
     [ -n "$BASE" ] && break
     git rev-parse -q --verify "refs/remotes/$b" >/dev/null && BASE=$b
@@ -62,12 +76,20 @@ if [ -z "$BASE" ]; then
   [ -n "$BASE" ] || fail "can't find $REMOTE's default branch; pass --base <ref>"
 fi
 git rev-parse -q --verify "$BASE^{commit}" >/dev/null || fail "base $BASE is not a commit"
-[ "$BRANCH" != "${BASE#"$REMOTE"/}" ] || fail "on $BRANCH, the base branch itself; the gate pushes work branches only"
 
-dirty=$(git status --porcelain) || fail "git status failed"
+# Never push to a branch that may be the default, whatever --base says.
+base_name=${BASE#refs/remotes/}; base_name=${base_name#refs/heads/}; base_name=${base_name#"$REMOTE"/}
+for p in main master "${DEFAULT#"$REMOTE"/}" "$base_name"; do
+  [ -n "$p" ] && [ "$BRANCH" = "$p" ] && fail "on $BRANCH, a default or base branch; the gate pushes work branches only"
+done
+
+dirty=$(git -c status.showUntrackedFiles=all -c core.fsmonitor=false \
+  status --porcelain --untracked-files=all --ignore-submodules=none) || fail "git status failed"
 [ -z "$dirty" ] || fail "uncommitted or untracked files; the pre-push hook would test them, not the commits" "$dirty"
+hidden=$(git ls-files -v | grep -E '^([a-z]|S) ') || hidden=""
+[ -z "$hidden" ] || fail "index entries marked assume-unchanged or skip-worktree hide working-tree changes from git status; clear them (git update-index --no-assume-unchanged / --no-skip-worktree)" "$hidden"
 
-COMMITS=$(git rev-list --reverse --no-merges "$BASE..HEAD") || fail "can't list commits since $BASE"
+COMMITS=$(git rev-list --reverse --first-parent "$BASE..HEAD") || fail "can't list commits since $BASE"
 [ -n "$COMMITS" ] || fail "no commits on $BRANCH ahead of $BASE"
 
 # test, md or code. Shell test scripts and *.bats are tests (shinfactory#215).
@@ -82,16 +104,22 @@ kind() {
   esac
 }
 
-# A commit's kind: code if any file is code, else test if any is a test, else
-# none (Markdown-only or empty).
+# A commit's kind: code if it changes any code file (deletions included), else
+# test if it adds or changes a test, else none (Markdown only, test deletions
+# only, or empty). A merge is diffed against its first parent.
 commit_kind() {
+  if git rev-parse -q --verify "$1^2" >/dev/null; then
+    changes=$(git -c core.quotePath=false diff-tree -r --name-status "$1^1" "$1")
+  else
+    changes=$(git -c core.quotePath=false diff-tree -r --no-commit-id --name-status --root "$1")
+  fi
   k=none
-  files=$(git -c core.quotePath=false diff-tree --no-commit-id --name-only -r --root "$1")
   set -f; IFS=$NL
-  for f in $files; do
+  for line in $changes; do
+    st=${line%%"$TAB"*}; f=${line#*"$TAB"}
     case $(kind "$f") in
       code) k="code"; break ;;
-      test) k="test" ;;
+      test) [ "$st" = D ] || k="test" ;;
     esac
   done
   set +f; unset IFS
@@ -103,7 +131,11 @@ if [ "$BUG" = 1 ]; then
   for c in $COMMITS; do
     case $(commit_kind "$c") in
       test) tested=1; break ;;
-      code) offenders="$offenders  $(git log -1 --format='%h %s' "$c")$NL" ;;
+      code)
+        line=$(git log -1 --format='%h %s' "$c")
+        git rev-parse -q --verify "$c^2" >/dev/null && line="$line (merge)"
+        offenders="$offenders  $line$NL"
+        ;;
     esac
   done
   if [ -n "$offenders" ]; then
@@ -115,12 +147,15 @@ fi
 
 # A push with no pre-push hook would pass without running a check.
 hook=$(git rev-parse --git-path hooks/pre-push)
-[ -x "$hook" ] || fail "no pre-push hook at $hook, so pushing runs no checks; run \`lefthook install\`"
+[ -f "$hook" ] && [ -x "$hook" ] || fail "no pre-push hook at $hook, so pushing runs no checks; run \`lefthook install\`"
 
-# LEFTHOOK=0 or LEFTHOOK_EXCLUDE in the caller's env would skip the checks.
-unset LEFTHOOK LEFTHOOK_EXCLUDE
 # shellcheck disable=SC2086 # $LEASE is empty or one flag
 out=$(git push $LEASE -u "$REMOTE" "HEAD:refs/heads/$BRANCH" 2>&1) ||
   fail "push of $BRANCH refused by the pre-push hook or $REMOTE; git push said:" "$out"
+# lefthook's hook prints this and exits 0 when it can't find the binary.
+case "$out" in
+  *"Can't find lefthook in PATH"*)
+    fail "pushed $BRANCH, but the pre-push hook couldn't find lefthook, so no check ran; install lefthook (or the repo's node_modules) and rerun" "$out" ;;
+esac
 printf 'PASS: pushed %s at %s to %s; pre-push hook passed\n' "$BRANCH" "$(git rev-parse HEAD)" "$REMOTE"
 printf '%s\n' "$out"

@@ -515,20 +515,30 @@ gantry-gate-evidence [--bug] [--base <ref>] [--remote <name>] [--force-with-leas
 - It pushes the branch (`HEAD` to `<remote>/<branch>`, upstream set), so the
   repo's pre-push hook runs gantry's checks. A refused push fails the gate, and
   the output is git's, hook output included. It never reads CLAUDE.md: the hook
-  decides which checks run. `LEFTHOOK=0` in the caller's env is ignored.
-- `--bug`: the branch needs a commit that changes only tests before its first
-  commit that changes anything else. Checked before the push, so a failing
-  branch isn't pushed. The failure names each offending commit (`<sha> <subject>`).
-  A test is a file under `test/`, `tests/`, `__tests__/` or `spec/`, or named
-  `*.test.*`, `*.spec.*`, `*_test.*`, `*_spec.*`, `test_*.py`, `*.bats`, or a shell
-  script `test.sh`, `tests.sh`, `test-*.sh`, `test_*.sh`, `*-test.sh`. A
-  Markdown-only commit counts neither way. It is judged by path only.
-- The branch's commits are those on `HEAD` and not on `--base` (default
-  `<remote>/HEAD`, else `<remote>/main` or `<remote>/master`); merge commits are skipped.
-- It fails without pushing on a detached `HEAD`, the base's own branch,
-  uncommitted or untracked files (the hook would test them, not the commits), no
-  commits ahead of the base, or no executable pre-push hook (a push would run
-  no checks; run `lefthook install`). `core.hooksPath` is respected.
+  decides which checks run. The caller's `LEFTHOOK*` variables (`LEFTHOOK=0`,
+  `LEFTHOOK_BIN`, `LEFTHOOK_CONFIG`, ...) and git config passed through the env
+  (`git -c`, `GIT_CONFIG_COUNT`) are dropped, so they can't skip or swap the checks.
+  A hook that prints lefthook's `Can't find lefthook in PATH` (it exits 0) fails
+  the gate, though the branch is already pushed by then.
+- `--bug`: the branch needs a commit that adds or changes tests, and nothing
+  else, before its first commit that changes anything else. Checked before the
+  push, so a failing branch isn't pushed. The failure names each offending
+  commit (`<sha> <subject>`, `(merge)` for a merge). A test is a file under
+  `test/`, `tests/`, `__tests__/` or `spec/`, or named `*.test.*`, `*.spec.*`,
+  `*_test.*`, `*_spec.*`, `test_*.py`, `*.bats`, or a shell script `test.sh`,
+  `tests.sh`, `test-*.sh`, `test_*.sh`, `*-test.sh`. A Markdown-only commit, or
+  one that only deletes tests, counts neither way. It is judged by path only.
+- The branch's commits are those on `HEAD`'s first-parent line and not on
+  `--base` (default `<remote>/HEAD`, else `<remote>/main` or `<remote>/master`).
+  A merge counts as everything it brings in over its first parent, so merging
+  the default branch in before the test commit fails `--bug`: rebase instead.
+- It fails without pushing on: a detached `HEAD`; a branch named `main`,
+  `master`, the remote's default or the base's (whatever `--base` says);
+  uncommitted or untracked files, or index entries marked assume-unchanged or
+  skip-worktree (the hook would test the working tree, not the commits; a
+  sparse checkout fails here); no commits ahead of the base; or no executable
+  pre-push hook file (a push would run no checks; run `lefthook install`).
+  `core.hooksPath` from the repo's config is respected.
 - `--force-with-lease`: for a branch rebased since its last push. Without it a
   rewritten branch's push is refused, and so is the gate.
 - Prints `PASS: pushed <branch> at <sha> to <remote>; ...` or `FAIL: <reason>`,

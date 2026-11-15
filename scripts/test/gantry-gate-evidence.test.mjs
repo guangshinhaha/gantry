@@ -26,10 +26,13 @@ function git(cwd, ...args) {
   return r.stdout.trim();
 }
 
-// A pre-push hook like lefthook's: honours LEFTHOOK=0, records that it ran,
-// prints its checks and exits `exit`.
+// A pre-push hook like lefthook's: honours LEFTHOOK=0, LEFTHOOK_BIN and
+// LEFTHOOK_CONFIG (here: a config with no pre-push, so nothing runs), records
+// that it ran, prints its checks and exits `exit`.
 const HOOK = (exit, marker) => `#!/bin/sh
 [ "\${LEFTHOOK:-1}" = 0 ] && exit 0
+[ -n "\${LEFTHOOK_BIN:-}" ] && exec "\$LEFTHOOK_BIN"
+[ -n "\${LEFTHOOK_CONFIG:-}" ] && exit 0
 echo ran > "${marker}"
 echo "gantry-test: ${exit === 0 ? "41 pass" : "3 failing: rate.test.ts"}"
 exit ${exit}
@@ -101,13 +104,50 @@ test("a failing pre-push hook fails the gate with the hook's output, and nothing
     assert.equal(remoteSha(), null);
   }, { hook: 1 }));
 
-test("LEFTHOOK=0 in the caller's env does not skip the hook", () =>
+test("LEFTHOOK* variables in the caller's env do not skip the hook", () =>
   withRepo(({ commit, gate }) => {
     commit("feat: rate", FIX);
-    const r = gate([], { LEFTHOOK: "0" });
-    assert.equal(r.status, 1, r.stdout);
-    assert.match(r.stdout, /3 failing/);
+    for (const env of [{ LEFTHOOK: "0" }, { LEFTHOOK_BIN: "true" }, { LEFTHOOK_CONFIG: "/dev/null" }]) {
+      const r = gate([], env);
+      assert.equal(r.status, 1, `${JSON.stringify(env)}: ${r.stdout}`);
+      assert.match(r.stdout, /3 failing/);
+    }
   }, { hook: 1 }));
+
+test("git config passed through the env can't swap the hook", () =>
+  withRepo(({ work, commit, gate }) => {
+    const dummy = join(work, "..", "dummy-hooks");
+    mkdirSync(dummy);
+    writeFileSync(join(dummy, "pre-push"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(dummy, "pre-push"), 0o755);
+    commit("feat: rate", FIX);
+    for (const env of [
+      { GIT_CONFIG_PARAMETERS: `'core.hookspath'='${dummy}'` },
+      { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: dummy },
+    ]) {
+      const r = gate([], env);
+      assert.equal(r.status, 1, `${Object.keys(env)[0]}: ${r.stdout}`);
+      assert.match(r.stdout, /3 failing/);
+    }
+  }, { hook: 1 }));
+
+test("a hook that can't find lefthook (exit 0) fails the gate", () =>
+  withRepo(({ commit, gate, hookPath }) => {
+    writeFileSync(hookPath, "#!/bin/sh\necho \"Can't find lefthook in PATH\"\n");
+    commit("feat: rate", FIX);
+    const r = gate();
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /^FAIL: pushed fix-1, but the pre-push hook couldn't find lefthook, so no check ran/);
+  }));
+
+test("a directory where the hook should be fails, without hanging", () =>
+  withRepo(({ commit, gate, hookPath }) => {
+    mkdirSync(hookPath);
+    commit("feat: rate", FIX);
+    const r = gate();
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /^FAIL: no pre-push hook/);
+  }, { hook: null }));
 
 test("bug work with a test-only commit before the fix passes", () =>
   withRepo(({ commit, gate, remoteSha, head }) => {
@@ -141,6 +181,47 @@ test("bug work with no test-only commit fails, naming the commits", () =>
     assert.match(r.stdout, /no test-only commit comes before these/);
     assert.match(r.stdout, new RegExp(`^  ${fix} fix: rate with its test$`, "m"));
   }));
+
+test("a commit that only deletes a test is not the test-first commit", () =>
+  withRepo(({ work, commit, gate }) => {
+    commit("test: old", { "old.test.js": "x\n" });
+    git(work, "push", "-q", "origin", "HEAD:main");
+    git(work, "fetch", "-q", "origin");
+    git(work, "rm", "-q", "old.test.js");
+    git(work, "commit", "-q", "-m", "test: drop old");
+    const fix = commit("fix: rate", FIX);
+    const r = gate(["--bug"]);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, new RegExp(`  ${fix} fix: rate`));
+  }));
+
+test("code a merge brings in counts as a fix, named as the merge", () => {
+  // A side branch with the fix, merged before the test commit.
+  withRepo(({ work, commit, gate }) => {
+    git(work, "switch", "-q", "-c", "side");
+    commit("fix: rate", FIX);
+    git(work, "switch", "-q", "fix-1");
+    git(work, "merge", "-q", "--no-ff", "-m", "merge side", "side");
+    const merge = git(work, "rev-parse", "--short", "HEAD");
+    commit("test: rate", TEST);
+    const r = gate(["--bug"]);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, new RegExp(`^  ${merge} merge side \\(merge\\)$`, "m"));
+  });
+  // An evil merge: code changed in the merge commit itself, no test at all.
+  withRepo(({ work, commit, gate }) => {
+    git(work, "switch", "-q", "-c", "side");
+    commit("docs: note", { "NOTE.md": "x\n" });
+    git(work, "switch", "-q", "fix-1");
+    git(work, "merge", "-q", "--no-ff", "--no-commit", "side");
+    writeFileSync(join(work, "app.js"), "export const rate = 2;\n");
+    git(work, "add", "app.js");
+    git(work, "commit", "-q", "-m", "merge side");
+    const r = gate(["--bug"]);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /merge side \(merge\)/);
+  });
+});
 
 test("Markdown-only commits count neither as the test nor as the fix", () => {
   withRepo(({ commit, gate }) => {
@@ -214,6 +295,29 @@ test("uncommitted or untracked files fail before pushing", () =>
     assert.equal(remoteSha(), null);
   }));
 
+test("changes hidden from git status still fail: assume-unchanged, skip-worktree, untracked off", () => {
+  for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+    withRepo(({ work, commit, gate, remoteSha }) => {
+      commit("feat: rate", FIX);
+      git(work, "update-index", flag, "app.js");
+      writeFileSync(join(work, "app.js"), "export const rate = 99;\n");
+      const r = gate();
+      assert.equal(r.status, 1, `${flag}: ${r.stdout}`);
+      assert.match(r.stdout, /assume-unchanged or skip-worktree/);
+      assert.match(r.stdout, /app\.js/);
+      assert.equal(remoteSha(), null);
+    });
+  }
+  withRepo(({ work, commit, gate }) => {
+    commit("feat: rate", FIX);
+    git(work, "config", "status.showUntrackedFiles", "no");
+    writeFileSync(join(work, "local.test.js"), "x\n");
+    const r = gate();
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /local\.test\.js/);
+  });
+});
+
 test("no commits ahead of the base fails", () =>
   withRepo(({ gate }) => {
     const r = gate();
@@ -221,12 +325,18 @@ test("no commits ahead of the base fails", () =>
     assert.match(r.stdout, /^FAIL: no commits on fix-1 ahead of origin\/main/);
   }));
 
-test("on the base branch itself it refuses", () =>
-  withRepo(({ work, gate }) => {
+test("on the default branch it refuses, whatever --base says", () =>
+  withRepo(({ work, gate, commit }) => {
     git(work, "switch", "-q", "main");
-    const r = gate();
-    assert.equal(r.status, 1);
-    assert.match(r.stdout, /^FAIL: on main, the base branch itself/);
+    commit("feat: rate", FIX);
+    const base = git(work, "rev-parse", "origin/main");
+    for (const args of [[], ["--base", "refs/remotes/origin/main"], ["--base", base], ["--base", "origin/main~0"]]) {
+      const r = gate(args);
+      assert.equal(r.status, 1, `${args.join(" ")}: ${r.stdout}`);
+      assert.match(r.stdout, /^FAIL: on main, a default or base branch/);
+    }
+    git(work, "switch", "-q", "-c", "master");
+    assert.match(gate(["--base", base]).stdout, /^FAIL: on master, a default or base branch/);
   }));
 
 test("a rewritten branch needs --force-with-lease to push", () =>
