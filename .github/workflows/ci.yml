@@ -101,13 +101,17 @@ jobs:
             if [ "$live_base" != "$BASE_REF" ]; then
               echo "The PR's base is now $live_base, not $BASE_REF as when this run started, so this run tests against $live_base."
               merge_sha=""
+              state=""
               for try in $(seq 1 18); do
-                if [ "$try" -gt 1 ]; then sleep 5; pull=$(gh api "repos/$REPO/pulls/$PR") || pull='{}'; fi
+                # A failed read is retried, not taken for a moved head.
+                if [ "$try" -gt 1 ]; then sleep 5; pull=$(gh api "repos/$REPO/pulls/$PR") || continue; fi
                 if [ "$(printf '%s' "$pull" | jq -r .head.sha)" != "$PR_HEAD" ]; then
                   echo "::error::PR #$PR has moved on from ${PR_HEAD:0:7}, so this run's result can't stand for it. The run for its new head covers it."; exit 1
                 fi
-                case "$(printf '%s' "$pull" | jq -r .mergeable)" in
-                  false) echo "::error::PR #$PR conflicts with its new base $live_base, so it can't be tested against it. Resolve the conflict and push."; exit 1 ;;
+                # Just after a base change, mergeable can still be the old base's
+                # answer, so a false only counts if it lasts the whole wait.
+                state=$(printf '%s' "$pull" | jq -r .mergeable)
+                case "$state" in
                   true)
                     m=$(printf '%s' "$pull" | jq -r '.merge_commit_sha // empty')
                     want="$(printf '%s' "$pull" | jq -r .base.sha) $PR_HEAD"
@@ -116,6 +120,9 @@ jobs:
                     fi ;;
                 esac
               done
+              if [ -z "$merge_sha" ] && [ "$state" = false ]; then
+                echo "::error::PR #$PR conflicts with its new base $live_base, so it can't be tested against it. Resolve the conflict and push."; exit 1
+              fi
               if [ -z "$merge_sha" ]; then
                 echo "::error::GitHub has no merge commit of ${PR_HEAD:0:7} into $live_base yet, so this run can't test against the new base. Re-run this workflow."; exit 1
               fi

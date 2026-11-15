@@ -57,6 +57,10 @@ export async function run({ repo, pr, path, api, cancel, rerun, sleep, waitMs = 
       await sleep(pollMs);
       target = await api(`repos/${repo}/actions/runs/${target.id}`);
     }
+    // A push during the wait starts a run for the new head, and a re-run of the
+    // old head's run would join ci's concurrency group and cancel it.
+    const live = await api(`repos/${repo}/pulls/${pr}`);
+    if (live.head?.sha !== headSha) return { status: "skip", reason: `PR #${pr} moved on from ${headSha.slice(0, 7)}: the run for its new head tests the new base.` };
     try {
       await rerun(target.id);
       return { status: "rerun", reason: `Re-ran ${path} run ${target.id} for head ${headSha.slice(0, 7)} against base ${pull.base.ref}.` };

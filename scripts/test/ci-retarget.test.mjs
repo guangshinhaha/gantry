@@ -10,10 +10,12 @@ const wr = (over) => ({ id: 1, event: "pull_request", path: PATH, head_sha: HEAD
 const PULL = { state: "open", draft: false, head: { sha: HEAD }, base: { ref: "main" } };
 
 // `states` replaces the target run's status on each poll; `rerunFails` makes the first re-runs throw.
-function fake({ pull = PULL, runs = [wr()], states = [], rerunFails = 0 } = {}) {
+// `pulls` replaces the PR on each read after the first (a push during the retarget).
+function fake({ pull = PULL, pulls = [], runs = [wr()], states = [], rerunFails = 0 } = {}) {
   const calls = { cancel: [], rerun: [], sleeps: 0, order: [] };
+  let reads = 0;
   const api = async (p) => {
-    if (/\/pulls\//.test(p)) return pull;
+    if (/\/pulls\//.test(p)) return reads++ === 0 ? pull : (pulls.shift() ?? pull);
     if (/\/actions\/runs\?/.test(p)) return { workflow_runs: runs };
     const id = Number(p.split("/").pop());
     return { ...runs.find((r) => r.id === id), status: states.shift() ?? "completed" };
@@ -103,4 +105,12 @@ test("a closed or draft PR re-runs nothing", async () => {
 
 test("no workflow path fails", async () => {
   assert.equal((await go(fake(), { path: "" })).status, "fail");
+});
+
+test("a push during the retarget skips the re-run, so the new head's run isn't cancelled", async () => {
+  const f = fake({ runs: [wr({ id: 4, status: "in_progress" })], states: ["completed"], pulls: [{ ...PULL, head: { sha: "b".repeat(40) } }] });
+  const r = await go(f, { waitMs: 50 });
+  assert.equal(r.status, "skip", r.reason);
+  assert.match(r.reason, /moved on/);
+  assert.deepEqual(f.calls.rerun, []);
 });

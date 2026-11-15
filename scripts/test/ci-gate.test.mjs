@@ -39,7 +39,9 @@ case "$*" in
   *"/pulls/"*)
     if [ -n "$STUB_PRS" ]; then
       n=$(cat "$RUNNER_TEMP/pr-polls" 2>/dev/null || echo 0); echo $((n + 1)) > "$RUNNER_TEMP/pr-polls"
-      f=$(filter "$@"); printf '%s' "$STUB_PRS" | jq -c --argjson n "$n" '.[[$n, length - 1] | min]' | jq -r "\${f:-.}"
+      body=$(printf '%s' "$STUB_PRS" | jq -c --argjson n "$n" '.[[$n, length - 1] | min]')
+      printf '%s' "$body" | jq -e '.fail' >/dev/null && { echo "gh: Bad Gateway (HTTP 502)" >&2; exit 1; }
+      f=$(filter "$@"); printf '%s' "$body" | jq -r "\${f:-.}"
     else f=$(filter "$@"); printf '%s' "$STUB_PR" | jq -r "\${f:-.}"; fi ;;
   *"/compare/"*) [ "$STUB_COMPARE" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }; f=$(filter "$@"); printf '%s' "$STUB_COMPARE" | jq -r "\${f:-.}" ;;
   *"/commits/"*"/pulls"*) [ "$STUB_MERGED" = fail ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }; printf '%s' "$STUB_MERGED" | jq -r "$(filter "$@")" ;;
@@ -539,4 +541,16 @@ test("gantry#134: secrets and node check out the gate's sha", () => {
   assert.match(ci, /^ {6}sha: \$\{\{ steps\.check\.outputs\.sha \}\}$/m);
   const refs = ci.match(/- uses: actions\/checkout@v4\n\s+with:\n\s+ref: \$\{\{ needs\.gate\.outputs\.sha \}\}/g) ?? [];
   assert.equal(refs.length, 2, "both the secrets and the node checkout use the gate's sha");
+});
+
+test("gantry#134: a failed PR read while waiting is retried, not taken for a moved head", () => {
+  const r = runGate({ root: 200, baseRef: "feature", commit: parents, prs: [live({ mergeable: null, merge_commit_sha: null }), { fail: true }, live()] });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.sha, "m2");
+});
+
+test("gantry#134: a stale mergeable false just after the retarget doesn't fail the gate", () => {
+  const r = runGate({ root: 200, baseRef: "feature", commit: parents, prs: [live({ mergeable: false, merge_commit_sha: null }), live()] });
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.outputs.sha, "m2");
 });
