@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const INIT = join(dirname(fileURLToPath(import.meta.url)), "../../bin/gantry-init");
-const WORKFLOW = ".github/workflows/ac-check.yml";
+const AC_CALLER = ".github/workflows/ac-check.yml";
 const PR_TEMPLATE = ".github/pull_request_template.md";
 
 // A .husky dir makes gantry-init stop before installing lefthook, so these
@@ -29,59 +29,27 @@ function put(dir, path, content) {
   writeFileSync(join(dir, path), content);
 }
 
-test("no flag: no workflow, and the template has no acceptance criteria", () =>
+test("the PR template has Closes and How I verified", () =>
   withRepo((dir) => {
     init(dir);
-    assert.equal(existsSync(join(dir, WORKFLOW)), false);
     const template = read(dir, PR_TEMPLATE);
-    assert.doesNotMatch(template, /acceptance criteria/i);
     assert.match(template, /^Closes #/m);
     assert.match(template, /^## How I verified/m);
   }));
 
-test("--ac-check: adds the workflow, and the template has the section", () =>
+test("a leftover ac-check caller is kept and flagged for deletion", () =>
   withRepo((dir) => {
-    init(dir, "--ac-check");
-    assert.ok(existsSync(join(dir, WORKFLOW)));
-    const template = read(dir, PR_TEMPLATE);
-    assert.match(template, /^## Acceptance criteria/m);
-    assert.match(template, /^Closes #/m);
-    assert.match(template, /^## How I verified/m);
-  }));
-
-test("re-run with no flag keeps an existing workflow unchanged", () =>
-  withRepo((dir) => {
-    put(dir, WORKFLOW, "# customised\n");
+    put(dir, AC_CALLER, "# old\n");
     const out = init(dir);
-    assert.equal(read(dir, WORKFLOW), "# customised\n");
-    assert.match(out, /keep\s+\.github\/workflows\/ac-check\.yml/);
+    assert.equal(read(dir, AC_CALLER), "# old\n");
+    assert.match(out, /! \.github\/workflows\/ac-check\.yml calls gantry's ac-check, which was removed/);
   }));
 
-test("existing workflow with no template: the new template has the section it needs", () =>
+test("--ac-check is refused, not taken as the repo dir", () =>
   withRepo((dir) => {
-    put(dir, WORKFLOW, "# customised\n");
-    init(dir);
-    assert.match(read(dir, PR_TEMPLATE), /^## Acceptance criteria/m);
-  }));
-
-test("--ac-check keeps an existing template and warns that it lacks the section", () =>
-  withRepo((dir) => {
-    put(dir, PR_TEMPLATE, "Closes #\n");
-    const out = init(dir, "--ac-check");
-    assert.equal(read(dir, PR_TEMPLATE), "Closes #\n");
-    assert.match(out, /! .*pull_request_template\.md.*Acceptance criteria/);
-  }));
-
-test("--ac-check warns about a heading ac-check can't read", () =>
-  withRepo((dir) => {
-    put(dir, PR_TEMPLATE, "## Acceptance criteria for this PR\n");
-    assert.match(init(dir, "--ac-check"), /! .*pull_request_template\.md.*Acceptance criteria/);
-  }));
-
-test("--ac-check stays quiet when the existing template has the section", () =>
-  withRepo((dir) => {
-    put(dir, PR_TEMPLATE, "## Acceptance criteria\n");
-    assert.doesNotMatch(init(dir, "--ac-check"), /! .*pull_request_template/);
+    const r = spawnSync(INIT, [dir, "--ac-check"], { encoding: "utf8" });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /--ac-check was removed/);
   }));
 
 const VERDICT = ".github/workflows/verdict-check.yml";

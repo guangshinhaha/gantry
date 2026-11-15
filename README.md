@@ -55,12 +55,6 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
   posted as a PR comment.
 - **`needs-human` label** when the PR touches a risky path (auth, migrations,
   payments, API keys, RLS). See below.
-- Optional (`--ac-check`): **Acceptance criteria.** If the PR says `Closes #N` and issue N has an
-  `Acceptance criteria` checklist, the PR body must repeat it with every item
-  ticked (and evidence). Unticked items fail the check, named; editing the
-  body re-runs it. Fewer items than the issue only warns. Skips drafts and PRs
-  with no such issue. Off by default: it can only see that a box is ticked, not
-  that the claim is true. A repo that already has the workflow keeps it.
 - Optional: Playwright end-to-end tests.
 - **Preview smoke tests** (Railway or Vercel): once the PR's preview is live on the PR's
   latest commit, Playwright `@smoke` tests run against it. Screenshots are
@@ -237,7 +231,6 @@ report their own checks:
 |---|---|---|
 | `ci.yml` | `gantry / ci-ok` | Yes, by default. |
 | `risky-paths.yml` | `risky-paths / risky-paths` | Optional, with `--require`. It fails only if the job breaks, because a matching path adds a label and doesn't fail the check. |
-| `ac-check.yml` | `ac-check / ac-check` | With `--require`, on repos that opted in with `--ac-check`. |
 | `verdict-check.yml` | `verdict-check / verdict-check` | Optional, with `--require`. It skips PRs without the high-risk label, and a skipped required check counts as passing. |
 | `build.yml` | `build / build` | No. It doesn't run on docs-only PRs, so they would wait forever. |
 | `review.yml` | `review / review` | No. It runs only on some PR events. |
@@ -604,7 +597,7 @@ applies gantry, writes a starting CLAUDE.md, and asks before pushing.
 **Existing repo:**
 
 ```sh
-~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--ac-check] [--verdict-check]
+~/Desktop/projects/gantry/bin/gantry-init [dir] [--prisma] [--nextjs] [--no-mutation] [--review] [--docker] [--verdict-check]
 git add -A && git commit -m "Add gantry checks"
 ```
 
@@ -622,9 +615,8 @@ and no others, with the repo's local binary. It adds:
 | `.github/workflows/risky-paths.yml` | A few lines that call gantry's `needs-human` labelling. |
 | `.github/gantry-risky-paths` | Example list of risky globs. Edit to fit the repo. |
 | `.github/workflows/review.yml` | Second review by Claude. Only with `--review`. |
-| `.github/workflows/ac-check.yml` | Only with `--ac-check`: calls gantry's acceptance-criteria check. Kept if it already exists. |
 | `.github/workflows/verdict-check.yml` | Only with `--verdict-check`: calls gantry's verdict check, which also re-runs when a verdict comment is posted, and a `risk-label` job that adds `risk:high` for High-risk paths (a repo's own go in `.github/gantry-high-risk-paths`). Kept if it already exists. It blocks a merge only once `verdict-check / verdict-check` is a required check. |
-| `.github/pull_request_template.md` | PR template: `Closes #`, how I verified. With `--ac-check`, or if the repo already has `ac-check.yml`, it also has an acceptance criteria section. |
+| `.github/pull_request_template.md` | PR template: `Closes #`, how I verified. A leftover `ac-check.yml` gets a warning to delete it: gantry#125 removed that check. |
 | `stryker.config.mjs` | Stryker config, with the repo's test runner detected. |
 | `.github/workflows/build.yml` | Only with `--docker`: calls gantry's build-and-verify Docker build (no push). |
 | `CLAUDE.md` | A starting template: commands, gates, review rules. |
@@ -651,7 +643,6 @@ hooks/          lefthook configs: base (every repo), node, prisma, nextjs
                 Optional Lighthouse step runs after smoke.
   risky-paths.yml  shared needs-human labelling that repos call
   review.yml    shared second review (claude-code-action) that repos call
-  ac-check.yml  shared acceptance-criteria check (opt-in via --ac-check)
   verdict-check.yml  shared check that a high-risk PR has a verdict at its head (opt-in)
   risk-label.yml  shared risk:high labelling for High-risk paths, ahead of verdict-check (opt-in)
   build.yml     shared Docker build-and-verify, no push (opt-in via --docker)
@@ -670,7 +661,6 @@ scripts/        mutation-report.mjs: turns Stryker's results into the PR comment
                 risky-paths.mjs: glob matching for needs-human (tests in scripts/test/)
                 high-risk-paths.mjs: default and per-repo High-risk globs for risk:high
                 check-risk-label-pin.mjs: flags a stale default gantry-ref in risk-label.yml
-                ac-check.mjs: parses PR/issue checklists (tests: ac-check.test.mjs)
                 verdict-check.mjs: finds the verdict at a PR's head (tests in scripts/test/)
                 verdict-rerun.mjs: re-runs a PR's verdict-check on a verdict comment (tests in scripts/test/)
                 selftest.mjs: the sandbox self-test that selftest.yml runs

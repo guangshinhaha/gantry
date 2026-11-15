@@ -106,27 +106,6 @@ test("risky-paths: no list on the base branch", () => {
   assert.match(r.output, /run=false/);
 });
 
-test("ac-check: not a PR, and a draft", () => {
-  const gate = "Decide whether to run";
-  assert.equal(runStep("ac-check.yml", gate, { PR_NUMBER: "", DRAFT: "" }).summary, "Skipped: not a pull request\n");
-  const draft = runStep("ac-check.yml", gate, { PR_NUMBER: "3", DRAFT: "true" });
-  assert.equal(draft.summary, "Skipped: draft PR\n");
-  assert.match(draft.output, /run=false/);
-  const ready = runStep("ac-check.yml", gate, { PR_NUMBER: "3", DRAFT: "false" });
-  assert.equal(ready.summary, "");
-  assert.match(ready.output, /run=true/);
-});
-
-test("ac-check: no linked issue with criteria", () => {
-  const dir = mkdtempSync(join(tmpdir(), "skip-ac-"));
-  const summary = join(dir, "summary");
-  writeFileSync(summary, "");
-  execFileSync("node", [join(root, "scripts/ac-check.mjs")], {
-    env: { PATH: process.env.PATH, PR_BODY: "no issue here", REPO: "o/r", GITHUB_STEP_SUMMARY: summary },
-  });
-  assert.match(readFileSync(summary, "utf8"), /^Skipped: no linked issue with an Acceptance criteria checklist/);
-});
-
 test("review: every skip path writes its reason", () => {
   const gate = "Decide whether to review";
   const pr = { EVENT: "pull_request", HAS_KEY: "true", DRAFT: "false", PR_AUTHOR_TYPE: "User", PR_FROM_FORK: "false", LABEL: "", PR_NUMBER: "7" };
