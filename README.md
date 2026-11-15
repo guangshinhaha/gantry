@@ -529,14 +529,19 @@ gantry-gate-evidence [--bug] [--base <ref>] [--remote <name>] [--force-with-leas
   `tests.sh`, `test-*.sh`, `test_*.sh`, `*-test.sh`. A Markdown-only commit, or
   one that only deletes tests, counts neither way. It is judged by path only.
 - The branch's commits are those on `HEAD`'s first-parent line and not on
-  `--base` (default `<remote>/HEAD`, else `<remote>/main` or `<remote>/master`).
+  `--base` (default the remote's default branch, else `<remote>/main` or
+  `<remote>/master`). The remote's default is `refs/remotes/<remote>/HEAD` and
+  what `git ls-remote --symref <remote> HEAD` names, so an unset or stale
+  `<remote>/HEAD` doesn't hide it; if neither names one, the gate fails.
   A merge counts as everything it brings in over its first parent, so merging
   the default branch in before the test commit fails `--bug`: rebase instead.
 - It fails without pushing on: a detached `HEAD`; a branch named `main`,
   `master`, the remote's default or the base's (whatever `--base` says);
-  uncommitted or untracked files, or index entries marked assume-unchanged or
-  skip-worktree (the hook would test the working tree, not the commits; a
-  sparse checkout fails here); no commits ahead of the base; or no executable
+  uncommitted or untracked files (including ones hidden by `.git/info/exclude`
+  or a global `core.excludesFile`: only `.gitignore` may hide a file), or index
+  entries marked assume-unchanged or skip-worktree (the hook would test the
+  working tree, not the commits; a sparse checkout fails here); an unknown
+  remote default branch; no commits ahead of the base; or no executable
   pre-push hook file (a push would run no checks; run `lefthook install`).
   `core.hooksPath` from the repo's config is respected.
 - `--force-with-lease`: for a branch rebased since its last push. Without it a
