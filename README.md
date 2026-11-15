@@ -92,11 +92,19 @@ Full reasoning: [the decision record](https://github.com/guangshinhaha/shinstack
     push:
       branches: [main]
     pull_request:
-      types: [opened, synchronize, reopened, edited]
+      types: [opened, synchronize, reopened, edited, ready_for_review]
   ```
 
   A caller copied before this has no `edited`: add the `types:` line, the
   `if:` and the `group:` suffix from `template/.github/workflows/ci.yml`.
+- **Draft PRs run nothing** (gantry#125). Agents push often, and the pre-push
+  hook already runs the same checks. The template caller skips its job while the
+  PR is a draft and runs once on `ready_for_review`. A draft's required
+  `gantry / ci-ok` stays "expected", never green, so it can't merge on an older
+  result. A caller copied before this runs CI on drafts as before: to opt in,
+  add `ready_for_review` to `types:` and `!github.event.pull_request.draft &&`
+  to the job's `if:`, both together. Without `ready_for_review`, leaving draft
+  starts nothing and the PR waits until its next push.
 - **Docs-only changes** always run the secret scan, because a key can be
   pasted into a doc. They skip the other checks above inside the job, so the
   status still reports instead of sitting on "pending". A change is docs-only
