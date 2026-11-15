@@ -74,7 +74,7 @@ function withRepo(fn, { hook = 0 } = {}) {
       const r = spawnSync("git", ["rev-parse", "-q", "--verify", "refs/heads/fix-1"], { cwd: origin, encoding: "utf8", env: ENV });
       return r.status === 0 ? r.stdout.trim() : null;
     };
-    fn({ work, commit, gate, remoteSha, head: () => git(work, "rev-parse", "HEAD"), hookRan: () => existsSync(marker), hookPath, marker });
+    fn({ root, origin, work, commit, gate, remoteSha, head: () => git(work, "rev-parse", "HEAD"), hookRan: () => existsSync(marker), hookPath, marker });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -338,6 +338,81 @@ test("on the default branch it refuses, whatever --base says", () =>
     git(work, "switch", "-q", "-c", "master");
     assert.match(gate(["--base", base]).stdout, /^FAIL: on master, a default or base branch/);
   }));
+
+test("with <remote>/HEAD unset, it asks the remote for its default and refuses to push to it", () =>
+  withRepo(({ origin, work, commit, gate }) => {
+    git(work, "push", "-q", "origin", "main:develop");
+    git(origin, "symbolic-ref", "HEAD", "refs/heads/develop");
+    git(work, "fetch", "-q", "origin");
+    git(work, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+    git(work, "switch", "-q", "-c", "develop", "origin/develop");
+    commit("feat: rate", FIX);
+    const before = git(origin, "rev-parse", "refs/heads/develop");
+    for (const args of [[], ["--base", "origin/main"]]) {
+      const r = gate(args);
+      assert.equal(r.status, 1, `${args.join(" ")}: ${r.stdout}`);
+      assert.match(r.stdout, /^FAIL: on develop, a default or base branch/);
+    }
+    assert.equal(git(origin, "rev-parse", "refs/heads/develop"), before, "develop was pushed");
+  }));
+
+test("with <remote>/HEAD unset, a feature branch takes the remote's default as its base", () =>
+  withRepo(({ origin, work, commit, gate }) => {
+    git(work, "push", "-q", "origin", "main:develop");
+    git(origin, "symbolic-ref", "HEAD", "refs/heads/develop");
+    git(work, "fetch", "-q", "origin");
+    git(work, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+    commit("feat: rate", FIX);
+    const r = gate();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+  }));
+
+test("fails closed when neither <remote>/HEAD nor the remote names a default branch", () =>
+  withRepo(({ origin, work, commit, gate, remoteSha }) => {
+    git(origin, "symbolic-ref", "HEAD", "refs/heads/nowhere");
+    git(work, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+    commit("feat: rate", FIX);
+    for (const args of [[], ["--base", "origin/main"]]) {
+      const r = gate(args);
+      assert.equal(r.status, 1, `${args.join(" ")}: ${r.stdout}`);
+      assert.match(r.stdout, /^FAIL: can't determine origin's default branch/);
+    }
+    assert.equal(remoteSha(), null);
+  }));
+
+test("untracked files hidden by .git/info/exclude or a global excludesFile fail; .gitignore'd ones don't", () => {
+  withRepo(({ work, commit, gate, remoteSha }) => {
+    commit("feat: rate", FIX);
+    writeFileSync(join(work, ".git/info/exclude"), "local.test.js\n");
+    writeFileSync(join(work, "local.test.js"), "x\n");
+    const r = gate();
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /^FAIL: untracked files/);
+    assert.match(r.stdout, /local\.test\.js/);
+    assert.equal(remoteSha(), null);
+  });
+  withRepo(({ root, work, commit, gate, remoteSha }) => {
+    commit("feat: rate", FIX);
+    const excludes = join(root, "global-excludes");
+    const config = join(root, "global-config");
+    writeFileSync(excludes, "*.local.js\n");
+    writeFileSync(config, `[core]\n\texcludesFile = ${excludes}\n`);
+    mkdirSync(join(work, "src"));
+    writeFileSync(join(work, "src/rate.local.js"), "x\n");
+    const r = gate([], { GIT_CONFIG_GLOBAL: config });
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /src\/rate\.local\.js/);
+    assert.equal(remoteSha(), null);
+  });
+  withRepo(({ work, commit, gate }) => {
+    commit("feat: rate", { ...FIX, ".gitignore": "build/\n", "sub/.gitignore": "*.log\n" });
+    mkdirSync(join(work, "build"));
+    writeFileSync(join(work, "build/out.js"), "x\n");
+    writeFileSync(join(work, "sub/run.log"), "x\n");
+    const r = gate();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+  });
+});
 
 test("a rewritten branch needs --force-with-lease to push", () =>
   withRepo(({ work, commit, gate, remoteSha, head }) => {

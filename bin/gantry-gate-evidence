@@ -13,16 +13,22 @@
 #    checks) runs. A refused push fails the gate with git's output, hook output
 #    included. It never parses CLAUDE.md: the hook decides which checks run.
 #
-# --base: the branch's base, default <remote>/HEAD, else <remote>/main or
-# <remote>/master. Commits are those on HEAD's first-parent line and not on the base.
+# <remote>'s default branch is refs/remotes/<remote>/HEAD and what
+# `git ls-remote --symref <remote> HEAD` names; both are guarded. If neither
+# names one, the gate fails closed.
+# --base: the branch's base, default <remote>'s default branch, else
+# <remote>/main or <remote>/master. Commits are those on HEAD's first-parent
+# line and not on the base.
 # --remote: default origin.
 # --force-with-lease: push with git's lease, for a branch whose history was
 # rewritten (a rebase) since its last push.
 #
 # Fails without pushing on: a detached HEAD; a branch named main, master,
 # <remote>'s default or the base's; uncommitted or untracked files, or index
-# entries marked assume-unchanged or skip-worktree (the hook would test the
-# working tree, not the commits); no commits ahead of the base; no pre-push hook.
+# entries marked assume-unchanged or skip-worktree, or untracked files hidden by
+# .git/info/exclude or core.excludesFile (the hook would test the working tree,
+# not the commits; only .gitignore may hide a file); <remote>'s default branch
+# unknown; no commits ahead of the base; no pre-push hook.
 # Fails after pushing if the hook couldn't find lefthook (it exits 0 then).
 # The caller's LEFTHOOK* variables and command-line git config are dropped.
 #
@@ -65,13 +71,19 @@ GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "not inside a git work tree"
 BRANCH=$(git symbolic-ref --short -q HEAD) || fail "HEAD is detached; check out the work branch"
+cd "$(git rev-parse --show-toplevel)" || fail "can't cd to the work tree's top level"
 
-DEFAULT=$(git symbolic-ref --short -q "refs/remotes/$REMOTE/HEAD" 2>/dev/null) || DEFAULT=""
+# <remote>'s default branch, as the local ref has it and as the remote says: the
+# local ref may be unset (a plain `git remote add` and fetch) or stale.
+LOCAL_DEFAULT=$(git symbolic-ref --short -q "refs/remotes/$REMOTE/HEAD" 2>/dev/null) || LOCAL_DEFAULT=""
+LOCAL_DEFAULT=${LOCAL_DEFAULT#"$REMOTE"/}
+REMOTE_DEFAULT=$(git ls-remote --symref "$REMOTE" HEAD 2>/dev/null |
+  awk '$1 == "ref:" && $3 == "HEAD" { sub(/^refs\/heads\//, "", $2); print $2; exit }') || REMOTE_DEFAULT=""
+[ -n "$LOCAL_DEFAULT$REMOTE_DEFAULT" ] ||
+  fail "can't determine $REMOTE's default branch: refs/remotes/$REMOTE/HEAD is unset and \`git ls-remote --symref $REMOTE HEAD\` names none, so the gate can't tell whether $BRANCH is it"
 if [ -z "$BASE" ]; then
-  BASE=$DEFAULT
-  for b in "$REMOTE/main" "$REMOTE/master"; do
-    [ -n "$BASE" ] && break
-    git rev-parse -q --verify "refs/remotes/$b" >/dev/null && BASE=$b
+  for b in "$LOCAL_DEFAULT" "$REMOTE_DEFAULT" main master; do
+    [ -n "$b" ] && git rev-parse -q --verify "refs/remotes/$REMOTE/$b" >/dev/null && { BASE=$REMOTE/$b; break; }
   done
   [ -n "$BASE" ] || fail "can't find $REMOTE's default branch; pass --base <ref>"
 fi
@@ -79,13 +91,18 @@ git rev-parse -q --verify "$BASE^{commit}" >/dev/null || fail "base $BASE is not
 
 # Never push to a branch that may be the default, whatever --base says.
 base_name=${BASE#refs/remotes/}; base_name=${base_name#refs/heads/}; base_name=${base_name#"$REMOTE"/}
-for p in main master "${DEFAULT#"$REMOTE"/}" "$base_name"; do
+for p in main master "$LOCAL_DEFAULT" "$REMOTE_DEFAULT" "$base_name"; do
   [ -n "$p" ] && [ "$BRANCH" = "$p" ] && fail "on $BRANCH, a default or base branch; the gate pushes work branches only"
 done
 
 dirty=$(git -c status.showUntrackedFiles=all -c core.fsmonitor=false \
   status --porcelain --untracked-files=all --ignore-submodules=none) || fail "git status failed"
 [ -z "$dirty" ] || fail "uncommitted or untracked files; the pre-push hook would test them, not the commits" "$dirty"
+# git status hides untracked files matched by .git/info/exclude or
+# core.excludesFile; only the repo's own .gitignore files may hide one.
+untracked=$(git -c core.fsmonitor=false ls-files --others --exclude-per-directory=.gitignore) ||
+  fail "git ls-files failed"
+[ -z "$untracked" ] || fail "untracked files, hidden from git status by .git/info/exclude or core.excludesFile; the pre-push hook would test them, not the commits. Commit, delete or .gitignore them" "$untracked"
 hidden=$(git ls-files -v | grep -E '^([a-z]|S) ') || hidden=""
 [ -z "$hidden" ] || fail "index entries marked assume-unchanged or skip-worktree hide working-tree changes from git status; clear them (git update-index --no-assume-unchanged / --no-skip-worktree)" "$hidden"
 
