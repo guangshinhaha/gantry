@@ -6,3 +6,7 @@ scripts/risky-paths.mjs
 .noodle.toml
 .agents/skills/**
 adapters/**
+# The evidence gate and local verdict check: a change here weakens what stands between an agent's branch and a merge.
+bin/gantry-gate-evidence
+bin/gantry-verdict-check
+scripts/verdict-check.mjs

@@ -45,8 +45,10 @@ test("CLI: prints the matches, nothing for a clean change; the list file may be 
   assert.equal(execFileSync("node", [script, join(dir, "no-such-list"), changed], { encoding: "utf8" }), "");
 });
 
-test("gantry's own list marks the factory config, skills and backlog adapter High", () => {
+test("gantry's own list marks the factory config, skills, backlog adapter and evidence gate High", () => {
   const list = readFileSync(new URL("../../.github/gantry-high-risk-paths", import.meta.url), "utf8");
-  const hits = highRisk([".noodle.toml", ".agents/skills/execute/SKILL.md", "adapters/github/backlog.sh", "README.md"], list).map((h) => h.file);
-  assert.deepEqual(hits, [".noodle.toml", ".agents/skills/execute/SKILL.md", "adapters/github/backlog.sh"]);
+  const high = [".noodle.toml", ".agents/skills/execute/SKILL.md", "adapters/github/backlog.sh",
+    "bin/gantry-gate-evidence", "bin/gantry-verdict-check", "scripts/verdict-check.mjs"];
+  const hits = highRisk([...high, "README.md", "bin/gantry-check"], list).map((h) => h.file);
+  assert.deepEqual(hits, high);
 });
