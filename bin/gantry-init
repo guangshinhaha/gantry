@@ -64,6 +64,12 @@ trap format_added EXIT
 echo "gantry → $(pwd)"
 copy "$GANTRY_DIR/template/lefthook.yml" lefthook.yml
 copy "$GANTRY_DIR/template/.github/workflows/ci.yml" .github/workflows/ci.yml
+copy "$GANTRY_DIR/template/.github/workflows/ci-retarget.yml" .github/workflows/ci-retarget.yml
+# gantry#134: a ci caller kept from before still listens for `edited`, so a title
+# or body edit adds a skipped run that resets the required checks.
+if grep -Eq '^[[:space:]]*types:.*\bedited\b' .github/workflows/ci.yml 2>/dev/null; then
+  echo "  ! .github/workflows/ci.yml listens for edited, so editing a PR's title or body resets its required checks (gantry#134). Remove edited from its types:, the changes.base part of its if: and its group: suffix; ci-retarget.yml now re-runs ci on a base change."
+fi
 copy "$GANTRY_DIR/template/.github/workflows/secrets-scan.yml" .github/workflows/secrets-scan.yml
 
 # Preview smoke tests: only when we know the platform (detected or --preview).
